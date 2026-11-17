@@ -1,8 +1,8 @@
 // =====================================================================================
 //  colormap.js
 //  MI-CHIPS (NSF #2606117): colormaps. AR headsets with additive displays (HoloLens 2)
-//  render black as transparent, so the default "Holo" maps keep a lifted minimum
-//  brightness. Viridis and Inferno are kept for desktop use and screenshots.
+//  render black as transparent. The MI-CHIPS brand maps start at Trojan Blue (dim but visible
+//  in a headset); the "Holo" maps keep a higher minimum brightness for bright rooms. Viridis and Inferno are kept for desktop use and screenshots.
 // =====================================================================================
 
 function make(name, hexes) {
@@ -21,10 +21,13 @@ function make(name, hexes) {
 }
 
 export const COLORMAPS = [
+  // MI-CHIPS brand maps (C03 Trojan Blue → C10 Ice Blue → C12 Caption Frost [→ C04 Orange]).
+  make('MI-CHIPS Ice', ['#00358E', '#1F5FC0', '#3F8FE6', '#73C5FB', '#ACDBFC', '#E3EDFC']),
+  make('MI-CHIPS Diverging', ['#00358E', '#3F8FE6', '#73C5FB', '#E3EDFC', '#FFC299', '#FF9447', '#FF6700']),
   make('Holo', ['#3E63DD', '#2FA4E7', '#2EC4B6', '#7BD14B', '#F2D43D', '#FF8A3D', '#FF4D6D']),
   make('Holo Diverging', ['#3B6FF5', '#8FB3FF', '#E6E6E6', '#FF9B7A', '#E8443A']),
   make('Viridis', ['#440154', '#472D7B', '#3B528B', '#2C728E', '#21918C', '#28AE80', '#5EC962', '#ADDC30', '#FDE725']),
   make('Inferno', ['#000004', '#1B0C41', '#4A0C6B', '#781C6D', '#A52C60', '#CF4446', '#ED6925', '#FB9B06', '#F7D13D', '#FCFFA4']),
 ];
 
-export const defaultColormapIndex = (field) => (field.diverging ? 1 : 0);
+export const defaultColormapIndex = (field) => (field.diverging ? 1 : 0); // brand maps by default

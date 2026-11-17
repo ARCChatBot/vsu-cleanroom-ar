@@ -1,16 +1,16 @@
 // =====================================================================================
 //  dashboard.js
 //  MI-CHIPS (NSF #2606117): in-scene dashboard listing every dataset by category, with
-//  a button per view type. Lives in the 3D scene so it works the same in AR (no DOM).
+//  a button per view type. It lives in the 3D scene, so it works the same in AR (no DOM).
 // =====================================================================================
 
 import { CanvasPanel, PX_PER_M } from '../render/panel.js';
-import { THEME } from '../render/chart.js';
+import { THEME, PALETTE } from '../render/chart.js';
 import { CATEGORIES, VIEW_KINDS } from '../data/datasets.js';
 
 export class Dashboard extends CanvasPanel {
   constructor(app) {
-    super({ title: 'MI-CHIPS  ·  Lab Data Visualization', width: 0.56, height: Dashboard.heightFor(app.datasets), closable: false });
+    super({ title: 'Lab Data Visualization', width: 0.58, height: Dashboard.heightFor(app.datasets), closable: false });
     this.app = app;
     this.kind = 'dashboard';
     this.interactables = [this.mesh];
@@ -18,7 +18,7 @@ export class Dashboard extends CanvasPanel {
 
   static heightFor(datasets) {
     const cats = new Set(datasets.map((d) => d.category)).size;
-    return (60 + 110 + cats * 52 + datasets.length * 64 + 100) / PX_PER_M;
+    return (64 + 150 + cats * 54 + datasets.length * 64 + 110) / PX_PER_M;
   }
 
   refresh() {
@@ -27,23 +27,26 @@ export class Dashboard extends CanvasPanel {
     this.dirty = true;
   }
 
-  draw() {
+  draw(ctx) {
     const app = this.app, W = this.W;
-    let y = this.paragraph('Measurements, simulation fields and quality metrics as 2D charts, contour maps and 3D renderings. Point at data to read values; drag title bars or base plates to move views.', 22, 74, W - 44, { size: 19 }) + 10;
+    this.eyebrow('Operation SEMI / MI-CHIPS', 22, 80);
+    let y = this.paragraph('Measurements, simulation fields and quality metrics as charts, contour maps and 3D renderings. Grab title bars or base plates to move views, use Explode to separate layers, and ask the AI analyst by voice.', 22, 108, W - 44, { size: 19 }) + 6;
 
     for (const cat of CATEGORIES) {
       const list = app.datasets.filter((d) => d.category === cat);
       if (!list.length) continue;
-      this.ctx.fillStyle = 'rgba(255,255,255,0.12)';
-      this.ctx.fillRect(22, y + 8, W - 44, 2);
-      this.text(cat.toUpperCase(), 22, y + 18, { size: 21, weight: 800, color: THEME.orange });
-      y += 52;
+      ctx.fillStyle = PALETTE.labelSlate;
+      ctx.fillRect(22, y + 10, W - 44, 1.5);
+      ctx.fillStyle = PALETTE.orange;
+      ctx.fillRect(22, y + 22, 6, 22);
+      this.text(cat.toUpperCase(), 38, y + 22, { size: 20, weight: 800, color: THEME.eyebrow });
+      y += 54;
       for (const d of list) {
         this.text(d.title, 22, y + 22, { size: 22, weight: 600, baseline: 'middle' });
         let x = W - 22;
         for (const kind of [...(VIEW_KINDS[d.kind] || [])].reverse()) {
           const open = app.isOpen(d, kind);
-          const bw = 30 + kind.length * 14;
+          const bw = 44 + kind.length * 13;
           x -= bw;
           this.button(kind, x, y, bw, 44, () => app.toggle(d, kind), { active: open });
           x -= 10;
@@ -52,10 +55,10 @@ export class Dashboard extends CanvasPanel {
       }
     }
 
-    y += 8;
+    y += 10;
     let x = 22;
-    x = this.button('Arrange around me', x, y, 250, 46, () => app.arrange());
-    x = this.button('Close all', x, y, 150, 46, () => app.closeAll());
-    this.text(`${app.datasets.length} datasets`, x + 6, y + 23, { size: 18, color: THEME.muted, baseline: 'middle' });
+    x = this.button('Arrange around me', x, y, 250, 48, () => app.arrange());
+    x = this.button(app.anyExploded() ? 'Collapse all' : 'Explode all', x, y, 170, 48, () => app.execute({ type: 'explode', target: 'all', exploded: !app.anyExploded() }));
+    this.button('Close all', x, y, 140, 48, () => app.closeAll());
   }
 }

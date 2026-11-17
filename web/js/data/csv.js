@@ -13,7 +13,7 @@
 
 import { makeField, fieldSet, recomputeRange, waferStats, spcCompute } from './datasets.js';
 
-const PALETTE = ['#2FA4E7', '#FF8A3D', '#7BD14B', '#F2D43D', '#E45FD6', '#2EC4B6'];
+import { CATEGORY_COLORS as PALETTE } from '../render/chart.js';
 const num = (s) => {
   const v = Number(String(s).trim());
   return String(s).trim() !== '' && Number.isFinite(v) ? v : null;

@@ -4,8 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>MI-CHIPS Lab Data AR</title>
-  <meta name="description" content="Web-based AR visualization of microelectronics lab data: measurements, simulation fields and quality metrics. VSU MI-CHIPS, NSF Award #2606117." />
-  <link rel="stylesheet" href="css/style.css?v=2" />
+  <meta name="description" content="Immersive web AR visualization of microelectronics lab data with a voice AI analyst. Operation SEMI / MI-CHIPS, NSF Award #2606117." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" />
+  <link rel="stylesheet" href="css/style.css?v=3" />
   <script type="importmap">
     {
       "imports": {
@@ -18,8 +21,11 @@
 <body>
   <header class="bar">
     <div class="brand">
-      <span class="mark">MI-CHIPS</span>
-      <span class="name">Lab Data AR</span>
+      <span class="rule" aria-hidden="true"></span>
+      <div>
+        <div class="eyebrow">Operation SEMI / MI-CHIPS</div>
+        <div class="name">Lab Data AR</div>
+      </div>
     </div>
     <div class="actions">
       <label class="btn" title="Load CSV files (or drop them anywhere on the page)">
@@ -27,11 +33,42 @@
         <input id="csv-input" type="file" accept=".csv,text/csv" multiple hidden />
       </label>
       <button id="arrange-btn" class="btn">Arrange</button>
+      <button id="ai-btn" class="btn">AI settings</button>
       <button id="xr-btn" class="btn primary" disabled>Checking AR…</button>
     </div>
   </header>
 
-  <div id="hint" class="hint">Drag to orbit · scroll to zoom · drag a panel's title bar to move it · point at data to read values</div>
+  <form id="ask-form" class="ask" autocomplete="off">
+    <button id="mic-btn" type="button" class="mic" title="Talk to the AI analyst" aria-label="Talk to the AI analyst">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+    </button>
+    <input id="ask-input" type="text" placeholder='Ask the analyst, e.g. "Where is the hottest spot?" or "Explode the wafer map"' aria-label="Ask the AI analyst" />
+    <button type="submit" class="btn primary">Ask</button>
+  </form>
+
+  <dialog id="ai-dialog" class="dialog">
+    <form method="dialog">
+      <div class="eyebrow">AI analyst</div>
+      <h2>Connect Claude</h2>
+      <p class="note">Voice commands such as “explode the wafer map” or “open the thermal map in 3D” work without this. To ask open questions about the data, connect Claude in one of two ways:</p>
+      <label>Anthropic API key <span class="muted">(your own; stays in this browser)</span>
+        <input id="ai-key" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+      </label>
+      <label>or proxy URL <span class="muted">(recommended for classes: the key stays on the server)</span>
+        <input id="ai-proxy" type="url" placeholder="https://your-proxy.example.workers.dev" spellcheck="false" />
+      </label>
+      <label class="check"><input id="ai-remember" type="checkbox" /> Remember on this device</label>
+      <label class="check"><input id="ai-speak" type="checkbox" checked /> Read answers aloud</label>
+      <p class="note">The key is sent only to Anthropic (or your proxy) and is never published with the site. Don’t enter a key on a shared or public computer. Model: Claude Opus 5.5.</p>
+      <div class="row">
+        <button id="ai-clear" class="btn">Clear key</button>
+        <span class="spacer"></span>
+        <button id="ai-cancel" class="btn">Cancel</button>
+        <button id="ai-save" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="drop" class="drop" hidden>Drop CSV files to add datasets</div>
   <div id="toast" class="toast" hidden></div>
   <noscript>This app needs JavaScript and WebGL.</noscript>

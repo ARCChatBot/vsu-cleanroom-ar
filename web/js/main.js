@@ -1,24 +1,37 @@
 // =====================================================================================
 //  main.js
 //  MI-CHIPS (NSF #2606117): web AR lab data visualization.
-//  • Desktop and phone: a three.js 3D scene with orbit controls; the mouse or touch
-//    points at panels and data.
+//  • Desktop and phone: a three.js scene with orbit controls; the mouse or touch points
+//    at panels and data, and the scroll wheel over a view scales it.
 //  • AR (WebXR immersive-ar: HoloLens 2 Edge, Quest Browser, Android Chrome): views
 //    float in the room. Hand rays or controllers point; air-tap / pinch / trigger selects.
-//  Datasets: built-in samples, CSVs listed in data/index.json, and CSVs the user imports
-//  or drops onto the page.
+//  • Every view can be moved, scaled, rotated (3D) and exploded into layers.
+//  • AI analyst: voice or typed questions, local commands, Claude-powered analysis.
+//  Colours: Operation SEMI / MI-CHIPS presentation color system (see render/chart.js).
 // =====================================================================================
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { allSamples } from './data/samples.js';
 import { parseCsv } from './data/csv.js';
+import { VIEW_KINDS } from './data/datasets.js';
+import { PALETTE } from './render/chart.js';
+import { COLORMAPS } from './render/colormap.js';
 import { PlotView } from './views/plotView.js';
 import { FieldView } from './views/fieldView.js';
 import { ControlChartView } from './views/controlChartView.js';
 import { SurfaceView } from './views/surfaceView.js';
 import { WaferView } from './views/waferView.js';
 import { Dashboard } from './views/dashboard.js';
+import { AiPanel } from './views/aiPanel.js';
+import { Analyst, loadSettings, saveSettings, aiConfigured } from './ai/analyst.js';
+import { Voice, speak, stopSpeaking, voiceSupported } from './ai/voice.js';
+
+// Canvas text needs Inter loaded before the first panel draws.
+await Promise.race([
+  Promise.all(['400 20px Inter', '600 20px Inter', '700 20px Inter', '800 20px Inter'].map((f) => document.fonts.load(f))),
+  new Promise((r) => setTimeout(r, 2500)),
+]).catch(() => {});
 
 // ---------------------------------------------------------------------------------
 //  Renderer, scene, camera
@@ -33,20 +46,110 @@ renderer.xr.setReferenceSpaceType('local-floor');
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const BG = new THREE.Color(0x0b1220);
+const BG = new THREE.Color(PALETTE.deepSlate);
 scene.background = BG;
-scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.6));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x1a2638, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.4);
 sun.position.set(1, 3, 2);
 scene.add(sun);
 
-const floor = new THREE.GridHelper(12, 24, 0x2a3c55, 0x1a2638);
+const floor = new THREE.GridHelper(12, 24, PALETTE.labelSlate, PALETTE.nightSlate);
 floor.material.transparent = true;
-floor.material.opacity = 0.6;
+floor.material.opacity = 0.7;
 scene.add(floor);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50);
 camera.position.set(0, 1.6, 1.25);
+
+// ---------------------------------------------------------------------------------
+//  App state + actions (shared by buttons, voice, typed questions and the AI)
+// ---------------------------------------------------------------------------------
+
+const settings = loadSettings();
+let focusedView = null;
+
+const app = {
+  datasets: [],
+  views: [],
+  dashboard: null,
+  aiPanel: null,
+  isOpen: (d, kind) => app.views.some((v) => v.dataset === d && v.kind === kind),
+  toggle: (d, kind) => (app.isOpen(d, kind) ? close(app.views.find((v) => v.dataset === d && v.kind === kind)) : open(d, kind)),
+  arrange: () => arrange(),
+  closeAll: () => [...app.views].forEach(close),
+  focused: () => focusedView || app.views[app.views.length - 1] || null,
+  anyExploded: () => app.views.some((v) => v.exploded),
+  aiReady: () => aiConfigured(settings),
+  listening: () => voice.listening,
+  handsFree: () => voice.handsFree,
+  toggleListening: () => { voice.toggle(); app.aiPanel.dirty = true; },
+  toggleHandsFree: () => { voice.handsFree ? voice.stop() : voice.start(true); app.aiPanel.dirty = true; },
+  stopSpeaking: () => stopSpeaking(),
+
+  /** Executes an action object and returns a short sentence describing what happened. */
+  execute(a) {
+    const byId = (id) => app.datasets.find((d) => d.id === id);
+    const viewsOf = (id) => app.views.filter((v) => v.dataset.id === id);
+    switch (a.type) {
+      case 'open': {
+        const d = byId(a.datasetId);
+        if (!d) return 'I could not find that dataset.';
+        const kind = VIEW_KINDS[d.kind].includes(a.view) ? a.view : VIEW_KINDS[d.kind][0];
+        open(d, kind);
+        focusedView = app.views.find((v) => v.dataset === d && v.kind === kind) || focusedView;
+        return `Opened ${d.title}${VIEW_KINDS[d.kind].length > 1 ? ` in ${kind}` : ''}.`;
+      }
+      case 'close': {
+        const vs = viewsOf(a.datasetId);
+        vs.forEach(close);
+        return vs.length ? `Closed ${vs[0].dataset.title}.` : 'That view is not open.';
+      }
+      case 'closeAll': app.closeAll(); return 'Closed all views.';
+      case 'explode': {
+        let targets = a.target === 'all' ? app.views : viewsOf(a.target);
+        if (!targets.length && a.target !== 'all' && a.exploded) {
+          const d = byId(a.target);
+          if (d) { open(d, VIEW_KINDS[d.kind][d.kind === 'field' ? 1 : 0]); targets = viewsOf(a.target); }
+        }
+        targets.forEach((v) => v.setExploded(a.exploded));
+        app.dashboard.dirty = app.aiPanel.dirty = true;
+        if (!targets.length) return 'There are no open views to explode.';
+        const what = a.target === 'all' ? 'all views' : targets[0].dataset.title;
+        return `${a.exploded ? 'Exploded' : 'Collapsed'} ${what}.`;
+      }
+      case 'arrange': arrange(); return 'Arranged the views around you.';
+      case 'scale': {
+        const v = app.focused();
+        if (!v) return 'Open a view first.';
+        scaleRoot(v.root, a.factor);
+        return a.factor > 1 ? `Made ${v.dataset.title} bigger.` : `Made ${v.dataset.title} smaller.`;
+      }
+      case 'rotate': {
+        const v = app.focused();
+        if (!v) return 'Open a view first.';
+        if (v.rotate) v.rotate(a.degrees); else v.root.rotateY(THREE.MathUtils.degToRad(a.degrees));
+        return `Rotated ${v.dataset.title}.`;
+      }
+      case 'colormap': {
+        const idx = COLORMAPS.findIndex((c) => c.name.toLowerCase() === String(a.colormap).toLowerCase());
+        const vs = viewsOf(a.datasetId).filter((v) => 'cmapIdx' in v);
+        if (idx < 0 || !vs.length) return 'That view has no colormap to change.';
+        for (const v of vs) {
+          v.cmapIdx = idx;
+          if (v.rebuild) v.rebuild(); else if (v.applyColormap) v.applyColormap(); else v.layout?.();
+          v.dirty = true; if (v.panel) v.panel.dirty = true;
+        }
+        return `Switched ${vs[0].dataset.title} to the ${COLORMAPS[idx].name} colormap.`;
+      }
+      default: return '';
+    }
+  },
+};
+
+function scaleRoot(root, f) {
+  const s = THREE.MathUtils.clamp(root.scale.x * f, 0.35, 3.5);
+  root.scale.setScalar(s);
+}
 
 // ---------------------------------------------------------------------------------
 //  Pointers: mouse/touch + XR controllers/hands share one code path
@@ -59,18 +162,8 @@ const getPointer = (id) => {
   return pointers.get(id);
 };
 
-const app = {
-  datasets: [],
-  views: [],
-  dashboard: null,
-  isOpen: (d, kind) => app.views.some((v) => v.dataset === d && v.kind === kind),
-  toggle: (d, kind) => (app.isOpen(d, kind) ? close(app.views.find((v) => v.dataset === d && v.kind === kind)) : open(d, kind)),
-  arrange: () => arrange(),
-  closeAll: () => [...app.views].forEach(close),
-};
-
 function interactiveMeshes() {
-  const list = [...app.dashboard.interactables];
+  const list = [...app.dashboard.interactables, ...app.aiPanel.interactables];
   for (const v of app.views) list.push(...v.interactables);
   return list;
 }
@@ -86,12 +179,15 @@ function mouseRay(e) {
   return p;
 }
 
+function hitAt(ray) {
+  raycaster.ray.copy(ray);
+  return raycaster.intersectObjects(interactiveMeshes(), false)[0] || null;
+}
+
 // Registered before OrbitControls so a click on a panel can disable orbiting first.
 renderer.domElement.addEventListener('pointerdown', (e) => {
   const p = mouseRay(e);
-  raycaster.ray.copy(p.ray);
-  const hit = raycaster.intersectObjects(interactiveMeshes(), false)[0];
-  controls.enabled = !hit;
+  controls.enabled = !hitAt(p.ray);
   p.pressed = true;
   processPointer(p); // handle the press where it happened, not a frame later
 });
@@ -103,6 +199,15 @@ window.addEventListener('pointerup', (e) => {
   controls.enabled = true;
 });
 renderer.domElement.addEventListener('pointerleave', () => { getPointer('mouse').active = false; });
+// Scroll over a view scales it; elsewhere the wheel zooms the camera.
+renderer.domElement.addEventListener('wheel', (e) => {
+  const hit = hitAt(mouseRay(e).ray);
+  const v = hit?.object.userData.view;
+  if (!v) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  scaleRoot(v.root, e.deltaY < 0 ? 1.08 : 1 / 1.08);
+}, { passive: false, capture: true });
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1.35, 0);
@@ -115,7 +220,7 @@ const xrControllers = [0, 1].map((i) => {
   const c = renderer.xr.getController(i);
   const line = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
-    new THREE.LineBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.8 }));
+    new THREE.LineBasicMaterial({ color: PALETTE.iceBlue, transparent: true, opacity: 0.85 }));
   line.visible = false;
   c.add(line);
   c.userData.line = line;
@@ -140,7 +245,6 @@ function updateXrPointers() {
 
 function processPointer(p) {
   if (!p.active && !p.drag) { if (p.hover) { p.hover.onLeave?.(); p.hover = null; } p.pressed = p.released = false; return null; }
-  raycaster.ray.copy(p.ray);
 
   if (p.drag) {
     const point = p.ray.at(p.drag.dist, new THREE.Vector3());
@@ -151,19 +255,24 @@ function processPointer(p) {
     return null;
   }
 
-  const hit = raycaster.intersectObjects(interactiveMeshes(), false)[0];
+  const hit = hitAt(p.ray);
   const target = hit?.object.userData.target ?? null;
   if (p.hover && p.hover !== target) p.hover.onLeave?.();
   p.hover = target;
   if (target) target.onHover?.(hit);
   if (p.pressed && target) {
     const r = target.onDown?.(hit);
-    if (r?.dragRoot) {
-      p.drag = { root: r.dragRoot, face: r.face, dist: hit.distance, offset: r.dragRoot.position.clone().sub(hit.point) };
-    }
+    if (hit.object.userData.view) setFocus(hit.object.userData.view);
+    if (r?.dragRoot) p.drag = { root: r.dragRoot, face: r.face, dist: hit.distance, offset: r.dragRoot.position.clone().sub(hit.point) };
   }
   p.pressed = p.released = false;
   return hit;
+}
+
+function setFocus(v) {
+  if (focusedView === v) return;
+  focusedView = v;
+  app.aiPanel.set({ mode: `focus: ${v.dataset.title}` });
 }
 
 // ---------------------------------------------------------------------------------
@@ -186,34 +295,32 @@ function faceViewer(root) {
   root.lookAt(target); // Object3D.lookAt points +Z at the target; panels and 3D views face +Z
 }
 
-// Arc slots (degrees, + = viewer's right). −34° is reserved for the dashboard.
-const DASH_ANGLE = -34;
-const SLOTS = [0, 34, 68, -68, 102, -102, 136, -136];
+// Arc slots (degrees, + = viewer's right). Left side is reserved for the dashboard and AI panel.
+const DASH_ANGLE = -36, AI_ANGLE = -72;
+const SLOTS = [0, 34, 68, 102, 136, -110, -140, 170];
 let nextSlot = 0;
 
-function place(view, slot) {
+function placeAt(root, angleDeg, dist, dy) {
   const { pos, fwd } = viewerPose();
-  const inXR = renderer.xr.isPresenting;
-  const ang = THREE.MathUtils.degToRad(SLOTS[slot % SLOTS.length]);
   const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+  const ang = THREE.MathUtils.degToRad(angleDeg);
   const dir = fwd.clone().multiplyScalar(Math.cos(ang)).addScaledVector(right, Math.sin(ang));
-  const dist = (view.is3D ? 1.0 : 0.95) * (inXR ? 1 : 1.75) + Math.floor(slot / SLOTS.length) * 0.25;
   const p = pos.clone().addScaledVector(dir, dist);
-  p.y = pos.y + (view.is3D ? (inXR ? -0.5 : -0.75) : -0.05); // look down onto 3D views
-  view.root.position.copy(p);
-  faceViewer(view.root);
+  p.y = pos.y + dy;
+  root.position.copy(p);
+  faceViewer(root);
 }
 
-function placeDashboard() {
-  const { pos, fwd } = viewerPose();
+function place(view, slot) {
   const inXR = renderer.xr.isPresenting;
-  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
-  const ang = THREE.MathUtils.degToRad(DASH_ANGLE);
-  const dir = fwd.clone().multiplyScalar(Math.cos(ang)).addScaledVector(right, Math.sin(ang));
-  const p = pos.clone().addScaledVector(dir, inXR ? 0.85 : 1.6);
-  p.y = pos.y - 0.08;
-  app.dashboard.root.position.copy(p);
-  faceViewer(app.dashboard.root);
+  const dist = (view.is3D ? 1.0 : 0.95) * (inXR ? 1 : 1.75) + Math.floor(slot / SLOTS.length) * 0.25;
+  placeAt(view.root, SLOTS[slot % SLOTS.length], dist, view.is3D ? (inXR ? -0.5 : -0.75) : -0.05);
+}
+
+function placeSidePanels() {
+  const inXR = renderer.xr.isPresenting;
+  placeAt(app.dashboard.root, DASH_ANGLE, inXR ? 0.85 : 1.6, -0.06);
+  placeAt(app.aiPanel.root, AI_ANGLE, inXR ? 0.85 : 1.6, -0.12);
 }
 
 function createView(d, kind) {
@@ -233,9 +340,14 @@ function open(d, kind) {
   v.onClose = () => close(v);
   v.onOpenField = (field, k) => open(field, k);
   v.onInspect = (text) => xapi('inspected', d.id, text);
-  place(v, nextSlot++);
+  const chrome = v.panel || v; // the panel that carries the title-bar controls
+  chrome.onScale = (f) => scaleRoot(v.root, f);
+  if (!v.panel) v.onExplode = () => { v.setExploded(!v.exploded); app.dashboard.dirty = app.aiPanel.dirty = true; };
+  for (const m of v.interactables) m.userData.view = v;
+  place(v, app.views.length); // next free slot, so views reopened after "close all" land in front
   scene.add(v.root);
   app.views.push(v);
+  focusedView = v;
   app.dashboard.dirty = true;
   xapi('opened', d.id, kind);
 }
@@ -249,11 +361,12 @@ function close(v) {
   scene.remove(v.root);
   v.dispose();
   app.views = app.views.filter((x) => x !== v);
+  if (focusedView === v) focusedView = null;
   app.dashboard.dirty = true;
 }
 
 function arrange() {
-  placeDashboard();
+  placeSidePanels();
   app.views.forEach((v, i) => place(v, i));
   nextSlot = app.views.length;
 }
@@ -266,6 +379,70 @@ function xapi(verb, id, detail) {
 }
 
 // ---------------------------------------------------------------------------------
+//  AI analyst + voice
+// ---------------------------------------------------------------------------------
+
+const analyst = new Analyst(app);
+let busy = false;
+
+async function ask(text) {
+  if (!text || busy) return;
+  busy = true;
+  app.aiPanel.set({ heard: text, state: 'thinking', answer: '…' });
+  xapi('asked', app.focused()?.dataset.id || 'none', text);
+  try {
+    const { text: answer } = await analyst.handle(text, settings, () => app.aiPanel.set({ state: 'thinking' }));
+    app.aiPanel.set({ state: 'idle', answer });
+    if (settings.speak !== false) speak(answer);
+  } catch (e) {
+    const msg = e?.status === 401 ? 'The AI connection was rejected. Check the API key in AI settings.'
+      : e?.status === 429 ? 'The AI service is busy (rate limited). Try again in a moment.'
+      : e?.status ? `AI error ${e.status}: ${e.message}` : `Could not reach the AI service: ${e?.message || e}`;
+    app.aiPanel.set({ state: 'error', answer: msg });
+  } finally {
+    busy = false;
+    app.dashboard.dirty = true;
+  }
+}
+
+const micBtn = document.getElementById('mic-btn');
+const voice = new Voice({
+  onResult: (text) => ask(text),
+  onState: (state, detail) => {
+    if (state === 'listening') app.aiPanel.set({ state: 'listening', heard: detail || app.aiPanel.heard });
+    else if (state === 'error') app.aiPanel.set({ state: 'error', answer: detail });
+    else if (!busy) app.aiPanel.set({ state: 'idle' });
+    micBtn.classList.toggle('live', voice.listening);
+  },
+});
+
+// DOM: ask bar, mic, settings dialog
+const askForm = document.getElementById('ask-form');
+const askInput = document.getElementById('ask-input');
+askForm.addEventListener('submit', (e) => { e.preventDefault(); const t = askInput.value.trim(); askInput.value = ''; ask(t); });
+micBtn.addEventListener('click', () => app.toggleListening());
+if (!voiceSupported) { micBtn.disabled = true; micBtn.title = 'Voice input is not supported in this browser'; }
+
+const dlg = document.getElementById('ai-dialog');
+const fld = { key: document.getElementById('ai-key'), proxy: document.getElementById('ai-proxy'), remember: document.getElementById('ai-remember'), speak: document.getElementById('ai-speak') };
+document.getElementById('ai-btn').addEventListener('click', () => {
+  fld.key.value = settings.apiKey || ''; fld.proxy.value = settings.proxyUrl || '';
+  fld.remember.checked = !!settings.remember; fld.speak.checked = settings.speak !== false;
+  dlg.showModal();
+});
+document.getElementById('ai-save').addEventListener('click', (e) => {
+  e.preventDefault();
+  Object.assign(settings, { apiKey: fld.key.value.trim(), proxyUrl: fld.proxy.value.trim(), remember: fld.remember.checked, speak: fld.speak.checked });
+  saveSettings(settings);
+  analyst.reset();
+  app.aiPanel.dirty = true;
+  dlg.close();
+  toast(aiConfigured(settings) ? 'AI analyst connected. Ask a question.' : 'AI analyst disconnected; local voice commands still work.');
+});
+document.getElementById('ai-clear').addEventListener('click', (e) => { e.preventDefault(); fld.key.value = ''; });
+document.getElementById('ai-cancel').addEventListener('click', (e) => { e.preventDefault(); dlg.close(); });
+
+// ---------------------------------------------------------------------------------
 //  Datasets: samples, bundled CSVs, imported CSVs
 // ---------------------------------------------------------------------------------
 
@@ -275,6 +452,7 @@ function addDataset(d) {
     app.views.filter((v) => v.dataset === app.datasets[existing]).forEach(close);
     app.datasets[existing] = d;
   } else app.datasets.push(d);
+  analyst.reset(); // the data context changed: start a fresh AI conversation
   app.dashboard?.refresh();
 }
 
@@ -291,13 +469,10 @@ async function loadBundledCsvs() {
 async function importFiles(files) {
   const loaded = [], failed = [];
   for (const file of files) {
-    try {
-      const d = parseCsv(await file.text(), file.name);
-      addDataset(d);
-      loaded.push(d);
-    } catch (e) { failed.push(`${file.name}: ${e.message}`); }
+    try { const d = parseCsv(await file.text(), file.name); addDataset(d); loaded.push(d); }
+    catch (e) { failed.push(`${file.name}: ${e.message}`); }
   }
-  for (const d of loaded) open(d, ({ plot: 'Plot', field: '2D', wafer: '3D map', spc: 'Chart' })[d.kind]);
+  for (const d of loaded) open(d, VIEW_KINDS[d.kind][0]);
   toast([loaded.length ? `Loaded ${loaded.map((d) => d.title).join(', ')}` : '', ...failed].filter(Boolean).join(' · '));
 }
 
@@ -315,7 +490,7 @@ document.getElementById('arrange-btn').addEventListener('click', () => arrange()
 const drop = document.getElementById('drop');
 window.addEventListener('dragover', (e) => { e.preventDefault(); drop.hidden = false; });
 window.addEventListener('dragleave', (e) => { if (!e.relatedTarget) drop.hidden = true; });
-window.addEventListener('drop', (e) => { e.preventDefault(); drop.hidden = true; importFiles([...e.dataTransfer.files].filter((f) => /\.csv$/i.test(f.name))); });
+window.addEventListener('drop', (e) => { e.preventDefault(); drop.hidden = true; importFiles([...e.dataTransfer.files].filter((x) => /\.csv$/i.test(x.name))); });
 
 // ---------------------------------------------------------------------------------
 //  Enter AR / VR
@@ -324,10 +499,10 @@ window.addEventListener('drop', (e) => { e.preventDefault(); drop.hidden = true;
 const xrBtn = document.getElementById('xr-btn');
 let xrMode = null;
 async function setupXrButton() {
-  if (!navigator.xr) { xrBtn.textContent = 'AR needs HTTPS + a WebXR browser'; return; }
+  if (!navigator.xr) { xrBtn.textContent = 'AR needs HTTPS + WebXR'; return; }
   if (await navigator.xr.isSessionSupported('immersive-ar').catch(() => false)) xrMode = 'immersive-ar';
   else if (await navigator.xr.isSessionSupported('immersive-vr').catch(() => false)) xrMode = 'immersive-vr';
-  if (!xrMode) { xrBtn.textContent = 'AR not supported here'; return; }
+  if (!xrMode) { xrBtn.textContent = 'No AR device'; return; }
   xrBtn.textContent = xrMode === 'immersive-ar' ? 'Enter AR' : 'Enter VR';
   xrBtn.disabled = false;
 }
@@ -372,15 +547,18 @@ window.addEventListener('resize', () => {
 
 app.datasets = allSamples();
 app.dashboard = new Dashboard(app);
-scene.add(app.dashboard.root);
-placeDashboard();
+app.aiPanel = new AiPanel(app);
+scene.add(app.dashboard.root, app.aiPanel.root);
+placeSidePanels();
 open(app.datasets.find((d) => d.id === 'process-window'), '2D');
 open(app.datasets.find((d) => d.id === 'thermal'), '3D');
 loadBundledCsvs();
 setupXrButton();
-window.__michips = { app, scene, camera }; // handy for debugging in the console
+window.__michips = { app, scene, camera, ask }; // handy for debugging in the console
 
+const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1);
   if (!renderer.xr.isPresenting) controls.update();
   if (arrangeNextFrames > 0 && --arrangeNextFrames === 0) arrange();
 
@@ -391,7 +569,8 @@ renderer.setAnimationLoop(() => {
     if (line) line.scale.z = hit ? hit.distance : 1.5;
   }
 
-  app.dashboard.update();
-  for (const v of app.views) v.update();
+  app.dashboard.update(dt);
+  app.aiPanel.update(dt);
+  for (const v of app.views) v.update(dt);
   renderer.render(scene, camera);
 });

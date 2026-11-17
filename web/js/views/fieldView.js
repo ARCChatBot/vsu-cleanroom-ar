@@ -1,23 +1,24 @@
 // =====================================================================================
 //  fieldView.js
-//  MI-CHIPS (NSF #2606117): 2D field panel. A heatmap and/or contour plot with axes, a
-//  colourbar (orange ticks mark highlight levels), a pointer readout, and a button to
-//  open the field as a 3D surface.
+//  MI-CHIPS (NSF #2606117): 2D field panel. A heatmap and/or contour plot with axes,
+//  a colourbar, a pointer readout and a button to open the field as a 3D surface.
+//  Explode separates the heatmap, iso-lines and highlight contours (spec / threshold)
+//  into a 3D layer stack.
 // =====================================================================================
 
 import { CanvasPanel } from '../render/panel.js';
-import { PlotFrame, THEME, niceTicks, fmt, sig } from '../render/chart.js';
+import { PlotFrame, THEME, PALETTE, niceTicks, fmt, sig } from '../render/chart.js';
 import { COLORMAPS, defaultColormapIndex } from '../render/colormap.js';
 import { contourLevels, computeContours } from '../render/contours.js';
 import { fieldAt, normalize, sampleUV, dataX, dataY } from '../data/datasets.js';
 
-const PLOT_W = 600;
+const PLOT_W = 600, TOP = 64 + 168;
 
 export class FieldView extends CanvasPanel {
   constructor(f) {
     const aspect = Math.min(1.1, Math.max(0.4, (f.yMax - f.yMin) / (f.xMax - f.xMin) || 1));
     const plotH = Math.round(PLOT_W * aspect);
-    super({ title: f.title + '  ·  2D', width: 0.62, height: (60 + 140 + plotH + 90 + 200) / 1600 });
+    super({ title: f.title, width: 0.62, height: (TOP + plotH + 90 + 200) / 1600, explodable: true });
     this.dataset = f;
     this.kind = '2D';
     this.interactables = [this.mesh];
@@ -27,6 +28,11 @@ export class FieldView extends CanvasPanel {
     this.count = f.contourCount || 10;
     this.cmapIdx = defaultColormapIndex(f);
     this.hover = null;
+    this.frame = new PlotFrame(110, TOP, PLOT_W, plotH, f.xMin, f.xMax, f.yMin, f.yMax);
+
+    this.addLayer('Heatmap', (ctx) => { if (this.showHeat) this.drawHeat(ctx); });
+    this.addLayer('Iso-lines', (ctx) => { if (this.showContours) this.drawContours(ctx, false); });
+    if (f.highlightLevels?.length) this.addLayer(f.diverging ? 'Spec limits' : 'Threshold', (ctx) => this.drawContours(ctx, true));
     this.rebuild();
   }
 
@@ -34,7 +40,6 @@ export class FieldView extends CanvasPanel {
 
   rebuild() {
     const f = this.dataset;
-    // Heatmap image at grid resolution; the browser smooths it when scaling.
     const img = document.createElement('canvas');
     img.width = f.nx; img.height = f.ny;
     const ictx = img.getContext('2d'), data = ictx.createImageData(f.nx, f.ny);
@@ -48,33 +53,37 @@ export class FieldView extends CanvasPanel {
     ictx.putImageData(data, 0, 0);
     this.heatImg = img;
     this.segments = computeContours(f, contourLevels(f, this.count));
-    this.dirty = true;
+    this.dirty = this.layersDirty = true;
+  }
+
+  drawHeat(ctx) {
+    const fr = this.frame;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.heatImg, fr.x, fr.y, fr.w, fr.h);
+  }
+
+  drawContours(ctx, highlight) {
+    const fr = this.frame, f = this.dataset;
+    for (const s of this.segments) {
+      if (s.highlight !== highlight) continue;
+      ctx.strokeStyle = highlight ? PALETTE.orange : this.showHeat ? 'rgba(227,237,252,0.85)' : this.cmap.css(normalize(f, s.level));
+      ctx.lineWidth = highlight ? 5 : 2;
+      ctx.beginPath();
+      ctx.moveTo(fr.x + s.a[0] * fr.w, fr.y + (1 - s.a[1]) * fr.h);
+      ctx.lineTo(fr.x + s.b[0] * fr.w, fr.y + (1 - s.b[1]) * fr.h);
+      ctx.stroke();
+    }
   }
 
   draw(ctx) {
-    const f = this.dataset;
-    this.text(`${f.quantity} (${f.unit})`, 22, 72, { size: 24, weight: 700 });
-    this.paragraph(f.description || '', 22, 106, this.W - 44, { size: 19 });
+    const f = this.dataset, fr = this.frame;
+    this.eyebrow(`${f.category} · 2D field`, 22, 78);
+    this.text(`${f.quantity} (${f.unit})`, 22, 104, { size: 25, weight: 700 });
+    this.paragraph(f.description || '', 22, 140, this.W - 44, { size: 19, maxLines: 3 });
 
-    const top = 60 + 140;
-    const fr = (this.frame = new PlotFrame(110, top, PLOT_W, this.plotH, f.xMin, f.xMax, f.yMin, f.yMax));
-
-    if (this.showHeat) {
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(this.heatImg, fr.x, fr.y, fr.w, fr.h);
-    } else {
-      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(fr.x, fr.y, fr.w, fr.h);
-    }
-    if (this.showContours) {
-      for (const s of this.segments) {
-        ctx.strokeStyle = s.highlight ? THEME.orange : this.showHeat ? 'rgba(255,255,255,0.75)' : this.cmap.css(normalize(f, s.level));
-        ctx.lineWidth = s.highlight ? 5 : 2;
-        ctx.beginPath();
-        ctx.moveTo(fr.x + s.a[0] * fr.w, fr.y + (1 - s.a[1]) * fr.h);
-        ctx.lineTo(fr.x + s.b[0] * fr.w, fr.y + (1 - s.b[1]) * fr.h);
-        ctx.stroke();
-      }
-    }
+    // Plot well (layers draw the data on top of it)
+    ctx.fillStyle = PALETTE.nightSlate;
+    ctx.fillRect(fr.x, fr.y, fr.w, fr.h);
     fr.drawAxes(ctx, f.xLabel, f.yLabel, { grid: false });
 
     // Colourbar
@@ -91,16 +100,11 @@ export class FieldView extends CanvasPanel {
     }
     for (const h of f.highlightLevels || []) {
       if (h < f.min || h > f.max) continue;
-      ctx.strokeStyle = THEME.orange; ctx.lineWidth = 4;
+      ctx.strokeStyle = PALETTE.orange; ctx.lineWidth = 4;
       ctx.beginPath(); ctx.moveTo(bx - 4, yOf(h)); ctx.lineTo(bx + bw + 4, yOf(h)); ctx.stroke();
     }
-
-    // Cursor
     if (this.hover) {
-      const hx = fr.x + this.hover.u * fr.w, hy = fr.y + (1 - this.hover.v) * fr.h;
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(hx - 14, hy); ctx.lineTo(hx + 14, hy); ctx.moveTo(hx, hy - 14); ctx.lineTo(hx, hy + 14); ctx.stroke();
-      ctx.strokeStyle = THEME.orange; ctx.lineWidth = 3;
+      ctx.strokeStyle = PALETTE.iceBlue; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.moveTo(bx - 6, yOf(this.hover.value)); ctx.lineTo(bx + bw + 6, yOf(this.hover.value)); ctx.stroke();
     }
 
@@ -109,28 +113,28 @@ export class FieldView extends CanvasPanel {
     const readout = this.hover
       ? `${f.xLabel} = ${sig(this.hover.x, 3)},  ${f.yLabel} = ${sig(this.hover.y, 3)}   →   ${f.quantity} = ${sig(this.hover.value)} ${f.unit}`
       : 'Point at the field to read values';
-    this.text(readout, 22, y, { size: 22, weight: this.hover ? 600 : 400, color: this.hover ? THEME.ink : THEME.muted });
+    this.text(readout, 22, y, { size: 22, weight: this.hover ? 600 : 400, color: this.hover ? PALETTE.iceBlue : THEME.muted });
     y += 44;
     let x = 22;
-    x = this.button('Heatmap', x, y, 130, 46, () => { this.showHeat = !this.showHeat; }, { active: this.showHeat });
-    x = this.button('Contours', x, y, 140, 46, () => { this.showContours = !this.showContours; }, { active: this.showContours });
+    x = this.button('Heatmap', x, y, 140, 46, () => { this.showHeat = !this.showHeat; this.layersDirty = true; }, { active: this.showHeat });
+    x = this.button('Contours', x, y, 150, 46, () => { this.showContours = !this.showContours; this.layersDirty = true; }, { active: this.showContours });
     x = this.button('−', x, y, 50, 46, () => { this.count = Math.max(3, this.count - 1); this.rebuild(); });
-    this.text(`${this.count} levels`, x, y + 23, { size: 20, baseline: 'middle' });
+    this.text(`${this.count} levels`, x, y + 23, { size: 20, baseline: 'middle', color: THEME.caption });
     x += 100;
-    x = this.button('+', x, y, 50, 46, () => { this.count = Math.min(30, this.count + 1); this.rebuild(); });
-    y += 58;
-    x = 22;
-    x = this.button('Colormap: ' + this.cmap.name, x, y, 290, 46, () => { this.cmapIdx = (this.cmapIdx + 1) % COLORMAPS.length; this.rebuild(); });
-    this.button('Open 3D surface', x, y, 230, 46, () => this.onOpenField?.(f, '3D'));
+    this.button('+', x, y, 50, 46, () => { this.count = Math.min(30, this.count + 1); this.rebuild(); });
+    y += 58; x = 22;
+    x = this.button('Colormap: ' + this.cmap.name, x, y, 300, 46, () => { this.cmapIdx = (this.cmapIdx + 1) % COLORMAPS.length; this.rebuild(); });
+    this.button('Open 3D surface', x, y, 230, 46, () => this.onOpenField?.(f, '3D'), { primary: true });
     this.text('Source: ' + (f.source || ''), 22, this.H - 36, { size: 17, color: THEME.muted });
   }
 
+  /** Cursor drawn on the base plate (not a layer) so moving it doesn't redraw the data layers. */
   pointerMove(px, py) {
-    const uv = this.frame?.uv(px, py);
+    const uv = this.frame.uv(px, py);
     if (!uv) { if (this.hover) { this.hover = null; return true; } return false; }
     const f = this.dataset;
     this.hover = { u: uv[0], v: uv[1], x: dataX(f, uv[0]), y: dataY(f, uv[1]), value: sampleUV(f, uv[0], uv[1]) };
-    this.onInspect?.(`${f.quantity}=${sig(this.hover.value)}`);
+    this.onInspect?.(`${f.quantity}=${sig(this.hover.value)} at (${sig(this.hover.x, 3)}, ${sig(this.hover.y, 3)})`);
     return true;
   }
 

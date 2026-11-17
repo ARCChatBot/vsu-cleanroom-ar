@@ -4,17 +4,43 @@
 //  formatting, a plot frame (data ↔ pixel mapping, axes) and text wrapping.
 // =====================================================================================
 
-export const THEME = {
-  font: '"Segoe UI", system-ui, -apple-system, Roboto, sans-serif',
-  ink: '#E8EEF6',
-  muted: '#A9B8CC',
-  axis: '#DCE1EB',
-  grid: 'rgba(140,160,190,0.35)',
-  orange: '#FF6600',
-  danger: '#FF4D6D',
-  blue: '#002B49',
-  line: '#2FA4E7',
+/** Operation SEMI / MI-CHIPS presentation color system (C01–C12). */
+export const PALETTE = {
+  deepSlate: '#0B0F19',    // C01 Deep Academic Slate: primary dark surface
+  white: '#FFFFFF',        // C02 Presentation White: headlines on dark
+  trojanBlue: '#00358E',   // C03 Trojan Blue: brand blue, primary actions
+  orange: '#FF6700',       // C04 Precision Orange: small accents and highlights only
+  nightSlate: '#111928',   // C05 Night Slate: secondary dark surfaces
+  bodySilver: '#A6AFC1',   // C06 Body Silver: body copy on dark
+  labelSlate: '#53617A',   // C07 Label Slate: borders/secondary on dark
+  softWhite: '#FAFBFD',    // C08 Soft White
+  divider: '#E0E5EC',      // C09 Divider Gray
+  iceBlue: '#73C5FB',      // C10 Technology Ice Blue: indicators and highlights on dark
+  advisorGray: '#A4B4D0',  // C11 Advisor Blue Gray: eyebrow text on dark
+  frost: '#E3EDFC',        // C12 Caption Frost: bright captions on dark
 };
+
+export const THEME = {
+  font: 'Inter, "Segoe UI", system-ui, -apple-system, Roboto, sans-serif',
+  ink: PALETTE.white,
+  muted: PALETTE.bodySilver,
+  eyebrow: PALETTE.advisorGray,
+  caption: PALETTE.frost,
+  axis: PALETTE.advisorGray,
+  grid: 'rgba(83,97,122,0.45)',
+  orange: PALETTE.orange,
+  ice: PALETTE.iceBlue,
+  blue: PALETTE.trojanBlue,
+  line: PALETTE.iceBlue,
+  surface: PALETTE.deepSlate,
+  surface2: PALETTE.nightSlate,
+  border: PALETTE.labelSlate,
+};
+
+/** Ordered series colours on dark surfaces (low → high emphasis; orange last as the highlight). */
+export const SERIES_COLORS = [PALETTE.advisorGray, PALETTE.iceBlue, PALETTE.frost, PALETTE.white, PALETTE.orange];
+/** Unordered series colours (CSV imports). */
+export const CATEGORY_COLORS = [PALETTE.iceBlue, PALETTE.orange, PALETTE.frost, PALETTE.advisorGray, PALETTE.bodySilver, PALETTE.white];
 
 export function niceTicks(lo, hi, target = 5) {
   const nice = (x, round) => {

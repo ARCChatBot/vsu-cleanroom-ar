@@ -7,6 +7,7 @@
 //    They are NOT calibrated TCAD or metrology results.
 // =====================================================================================
 
+import { SERIES_COLORS } from '../render/chart.js';
 import { makeField, fieldAt, fieldSet, recomputeRange, dataX, dataY, waferStats, spcCompute } from './datasets.js';
 
 /** Deterministic RNG (mulberry32) with a Gaussian helper. */
@@ -35,7 +36,7 @@ export function allSamples() {
 function mosfetOutputCurves() {
   const r = rng(11);
   const vth = 0.45, k = 2.2 /* mA/V² */, lambda = 0.08;
-  const colors = ['#2FA4E7', '#2EC4B6', '#7BD14B', '#F2D43D', '#FF8A3D'];
+  const colors = SERIES_COLORS; // MI-CHIPS palette, ordered by gate voltage
   const series = [];
   for (let g = 0; g < 5; g++) {
     const vgs = 0.6 + 0.15 * g, vov = vgs - vth, pts = [];
