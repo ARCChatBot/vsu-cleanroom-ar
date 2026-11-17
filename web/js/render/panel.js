@@ -263,7 +263,11 @@ export class CanvasPanel {
 function makeTexture(canvas) {
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  // No mipmaps: they add ~33% GPU memory and are rebuilt on every redraw, which is too much
+  // for headset GPUs (HoloLens 2). Panels are viewed close up, so plain linear filtering is fine.
+  t.generateMipmaps = false;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
   return t;
 }
 

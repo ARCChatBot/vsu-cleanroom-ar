@@ -115,6 +115,8 @@ export class SurfaceView {
     this.bar.material.map?.dispose();
     this.bar.material.map = new THREE.CanvasTexture(c);
     this.bar.material.map.colorSpace = THREE.SRGBColorSpace;
+    this.bar.material.map.generateMipmaps = false;
+    this.bar.material.map.minFilter = THREE.LinearFilter;
     this.bar.material.needsUpdate = true;
     this.buildContours();
   }

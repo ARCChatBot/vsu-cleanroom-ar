@@ -588,6 +588,29 @@ xrBtn.addEventListener('click', async () => {
   }
 });
 
+// ---- AR diagnostics: kept across reloads so a crash inside the headset can be reported ----
+const DIAG_KEY = 'michips.xr.diag';
+const diag = { lines: [], active: false };
+function logDiag(msg) {
+  const line = `${new Date().toLocaleTimeString()} ${msg}`;
+  console.warn('[XR]', line);
+  diag.lines = [...diag.lines, line].slice(-15);
+  try { localStorage.setItem(DIAG_KEY, JSON.stringify({ active: diag.active, lines: diag.lines })); } catch { /* storage blocked */ }
+}
+/** Always close the session on trouble, so the headset never keeps a stuck immersive session. */
+function endXrSafely(reason) {
+  logDiag(`ending session: ${reason}`);
+  try { xrSession?.end().catch(() => {}); } catch { /* already gone */ }
+}
+window.addEventListener('error', (e) => { if (diag.active) logDiag(`error: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`); });
+window.addEventListener('unhandledrejection', (e) => { if (diag.active) logDiag(`unhandled: ${e.reason?.message || e.reason}`); });
+renderer.domElement.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  logDiag('graphics context lost (GPU memory)');
+  endXrSafely('graphics context lost');
+});
+window.addEventListener('pagehide', () => { if (xrSession) endXrSafely('page closed'); });
+
 // Views are placed only once the headset reports real head poses (HoloLens can take a moment),
 // then once more after tracking settles.
 let xrPoseFrames = -1, placedOnce = false;
@@ -598,9 +621,15 @@ renderer.xr.addEventListener('sessionstart', () => {
   floor.visible = !seeThrough;
   xrBtn.textContent = 'Exit';
   xrPoseFrames = 0; placedOnce = false; // start counting frames with a valid head pose
+  diag.active = true; loopErrors = 0;
+  const sess = renderer.xr.getSession();
+  logDiag(`session started (blend ${blend})`);
+  sess?.addEventListener('visibilitychange', () => logDiag(`visibility: ${sess.visibilityState}`));
 });
 renderer.xr.addEventListener('sessionend', () => {
   xrPoseFrames = -1;
+  diag.active = false;
+  logDiag('session ended');
   scene.background = BG;
   floor.visible = true;
   floor.position.y = 0;
@@ -634,7 +663,16 @@ setupXrButton();
 window.__michips = { app, scene, camera, ask }; // handy for debugging in the console
 
 const clock = new THREE.Clock();
+let loopErrors = 0;
 renderer.setAnimationLoop((time, frame) => {
+  try { frameStep(frame); } catch (err) {
+    loopErrors++;
+    if (loopErrors <= 3) logDiag(`frame error: ${err.message}`);
+    if (loopErrors === 30 && xrSession) endXrSafely('repeated frame errors');
+  }
+});
+
+function frameStep(frame) {
   const dt = Math.min(clock.getDelta(), 0.1);
   if (!renderer.xr.isPresenting) controls.update();
   if (xrPoseFrames >= 0 && frame) {
@@ -655,4 +693,13 @@ renderer.setAnimationLoop((time, frame) => {
   app.aiPanel.update(dt);
   for (const v of app.views) v.update(dt);
   renderer.render(scene, camera);
-});
+}
+
+// Report a previous AR session that crashed or never ended cleanly.
+try {
+  const prev = JSON.parse(localStorage.getItem(DIAG_KEY) || 'null');
+  if (prev && (prev.active || prev.lines.some((l) => /error|lost|unhandled|repeated/.test(l)))) {
+    toast(`Last AR session had a problem (send this to whoever maintains the app): ${prev.lines.slice(-6).join('  ·  ')}`, 45000);
+  }
+  localStorage.removeItem(DIAG_KEY);
+} catch { /* storage blocked */ }
