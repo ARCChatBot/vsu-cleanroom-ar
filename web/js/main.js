@@ -532,25 +532,36 @@ async function xrAttempts() {
   return list;
 }
 
+function withTimeout(promise, ms, what) {
+  let t;
+  return Promise.race([promise, new Promise((_, rej) => { t = setTimeout(() => rej(Object.assign(new Error(what), { name: 'TimeoutError' })), ms); })])
+    .finally(() => clearTimeout(t));
+}
+
 async function startXr() {
   const errors = [];
-  for (const { mode, init } of await xrAttempts()) {
+  const attempts = await xrAttempts();
+  for (const [i, { mode, init }] of attempts.entries()) {
+    xrBtn.textContent = `Starting… (${i + 1}/${attempts.length})`;
     let session = null;
+    const request = navigator.xr.requestSession(mode, init);
     try {
-      session = await navigator.xr.requestSession(mode, init);
+      // A permission prompt can take a while; don't wait forever on a call that never settles.
+      session = await withTimeout(request, 30000, 'the headset did not answer the AR request (look for an Allow prompt)');
       // Probe 'local-floor'; fall back to 'local' (origin at the starting head position).
       let space = 'local-floor';
-      try { await session.requestReferenceSpace('local-floor'); } catch { space = 'local'; }
+      try { await withTimeout(session.requestReferenceSpace('local-floor'), 5000, 'floor tracking timed out'); } catch { space = 'local'; }
       renderer.xr.setReferenceSpaceType(space);
       floor.position.y = space === 'local' ? -1.6 : 0;
       session.addEventListener('end', () => { xrSession = null; });
-      await renderer.xr.setSession(session);
+      await withTimeout(renderer.xr.setSession(session), 15000, 'setting up the AR view timed out');
       console.info(`[XR] started ${mode} with ${JSON.stringify(init.optionalFeatures || [])}, space ${space}, blend ${session.environmentBlendMode}`);
       return session;
     } catch (e) {
       errors.push(`${mode}${init.optionalFeatures ? ' [' + init.optionalFeatures.join(', ') + ']' : ' [no options]'}: ${e.name}: ${e.message}`);
       console.warn('[XR] attempt failed', mode, init, e);
       try { await session?.end(); } catch { /* already ended */ }
+      if (!session) request.then((late) => late.end()).catch(() => {}); // close a session that arrives after we gave up
       if (e.name === 'InvalidStateError' && !session) break; // another session is genuinely open
     }
   }
