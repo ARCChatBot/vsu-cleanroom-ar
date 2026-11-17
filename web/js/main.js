@@ -483,12 +483,12 @@ async function importFiles(files) {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms = 5000) {
   const el = document.getElementById('toast');
   if (!msg) return;
   el.textContent = msg; el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
 document.getElementById('csv-input').addEventListener('change', (e) => { importFiles([...e.target.files]); e.target.value = ''; });
@@ -514,31 +514,62 @@ async function setupXrButton() {
 }
 const xrLabel = () => (xrMode === 'immersive-ar' ? 'Enter AR' : 'Enter VR');
 let xrSession = null, xrStarting = false;
+
+/**
+ * Attempts, from richest to simplest. Headset browsers differ in which optional features
+ * they accept (HoloLens 2 Edge rejects some), so each step drops more. The last step uses
+ * immersive-vr, which on an additive display like HoloLens still renders as see-through AR.
+ */
+async function xrAttempts() {
+  const list = [
+    { mode: xrMode, init: { optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'], domOverlay: { root: document.body } } },
+    { mode: xrMode, init: { optionalFeatures: ['local-floor', 'hand-tracking'] } },
+    { mode: xrMode, init: {} },
+  ];
+  if (xrMode === 'immersive-ar' && await navigator.xr.isSessionSupported('immersive-vr').catch(() => false)) {
+    list.push({ mode: 'immersive-vr', init: { optionalFeatures: ['local-floor', 'hand-tracking'] } });
+  }
+  return list;
+}
+
+async function startXr() {
+  const errors = [];
+  for (const { mode, init } of await xrAttempts()) {
+    let session = null;
+    try {
+      session = await navigator.xr.requestSession(mode, init);
+      // Probe 'local-floor'; fall back to 'local' (origin at the starting head position).
+      let space = 'local-floor';
+      try { await session.requestReferenceSpace('local-floor'); } catch { space = 'local'; }
+      renderer.xr.setReferenceSpaceType(space);
+      floor.position.y = space === 'local' ? -1.6 : 0;
+      session.addEventListener('end', () => { xrSession = null; });
+      await renderer.xr.setSession(session);
+      console.info(`[XR] started ${mode} with ${JSON.stringify(init.optionalFeatures || [])}, space ${space}, blend ${session.environmentBlendMode}`);
+      return session;
+    } catch (e) {
+      errors.push(`${mode}${init.optionalFeatures ? ' [' + init.optionalFeatures.join(', ') + ']' : ' [no options]'}: ${e.name}: ${e.message}`);
+      console.warn('[XR] attempt failed', mode, init, e);
+      try { await session?.end(); } catch { /* already ended */ }
+      if (e.name === 'InvalidStateError' && !session) break; // another session is genuinely open
+    }
+  }
+  throw Object.assign(new Error(errors.join('  |  ')), { attempts: errors });
+}
+
 xrBtn.addEventListener('click', async () => {
   if (xrSession) { xrSession.end().catch(() => {}); return; }
   if (xrStarting) return; // ignore double taps while a session is starting
   xrStarting = true;
   xrBtn.disabled = true;
   xrBtn.textContent = 'Starting…';
-  let session = null;
   try {
-    session = await navigator.xr.requestSession(xrMode, {
-      optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'],
-      domOverlay: { root: document.body },
-    });
-    // HoloLens 2 may not grant 'local-floor': probe it and fall back to 'local' (head-relative origin).
-    let space = 'local-floor';
-    try { await session.requestReferenceSpace('local-floor'); } catch { space = 'local'; }
-    renderer.xr.setReferenceSpaceType(space);
-    floor.position.y = space === 'local' ? -1.6 : 0; // only visible in VR; keeps the grid near the real floor
-    session.addEventListener('end', () => { xrSession = null; });
-    await renderer.xr.setSession(session);
-    xrSession = session;
+    xrSession = await startXr();
   } catch (e) {
-    session?.end().catch(() => {}); // never leave a half-started session open
-    toast(e.name === 'InvalidStateError'
-      ? 'An earlier AR session is still open. Reload this page, then tap Enter AR again.'
-      : `Could not start AR: ${e.message}`);
+    const open = /InvalidStateError/.test(e.message);
+    toast(open
+      ? 'Another AR session is still open. Close every Edge tab using AR (or restart Edge), then try again.'
+      : `AR could not start. Details: ${e.message}`, 30000);
   } finally {
     xrStarting = false;
     xrBtn.disabled = false;
@@ -550,9 +581,10 @@ xrBtn.addEventListener('click', async () => {
 // then once more after tracking settles.
 let xrPoseFrames = -1, placedOnce = false;
 renderer.xr.addEventListener('sessionstart', () => {
-  const ar = xrMode === 'immersive-ar';
-  scene.background = ar ? null : BG;
-  floor.visible = !ar;
+  const blend = renderer.xr.getSession()?.environmentBlendMode || (xrMode === 'immersive-ar' ? 'alpha-blend' : 'opaque');
+  const seeThrough = blend !== 'opaque'; // HoloLens = additive, phones/Quest AR = alpha-blend
+  scene.background = seeThrough ? null : BG;
+  floor.visible = !seeThrough;
   xrBtn.textContent = 'Exit';
   xrPoseFrames = 0; placedOnce = false; // start counting frames with a valid head pose
 });
