@@ -1,0 +1,13 @@
+# Cloudflare Worker config for the MI-CHIPS AI proxy. See proxy/README.md.
+name = "michips-ai-proxy"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# Sites allowed to use the proxy (comma-separated, exact origins, no trailing slash).
+ALLOWED_ORIGINS = "https://arcchatbot.github.io,http://localhost:5173"
+ALLOWED_MODELS = "claude-opus-5-5"
+MAX_TOKENS_CAP = "16000"
+
+# The API key is a secret, never put it in this file:
+#   npx wrangler secret put ANTHROPIC_API_KEY

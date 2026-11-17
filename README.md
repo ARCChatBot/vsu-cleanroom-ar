@@ -1,45 +1,69 @@
 # VSU Cleanroom AR
 
-MI-CHIPS (Mixed Immersion Cleanroom & Hardware Intelligence & Progression System), NSF Award #2606117.
+Operation SEMI / MI-CHIPS (Mixed Immersion Cleanroom & Hardware Intelligence & Progression System), NSF Award #2606117.
 
-**Web-based AR lab data visualization** for microelectronics. Measurement data, simulation fields and quality-control metrics appear as 2D plots, heatmaps, contour plots and 3D renderings. It runs in any modern browser, and an **Enter AR** button places the views in your room on HoloLens 2 (Edge), Meta Quest (Browser) or Android (Chrome). There is no app to install.
+**Immersive, web-based AR lab data visualization** for microelectronics. Measurement data, simulation fields and quality-control metrics appear as 2D plots, heatmaps, contour plots and 3D renderings that you can move, scale, rotate and **explode** into layers, and you can ask an **AI analyst** about them by voice. It runs in any modern browser, and **Enter AR** places the views in your room on HoloLens 2 (Edge), Meta Quest (Browser) or Android (Chrome). There is no app to install.
 
-The web app is in [`web/`](web). The earlier native StereoKit/C# version is still in `src/` and `app/` ([details below](#legacy-stereokit-c-version)).
+**Live site:** https://arcchatbot.github.io/vsu-cleanroom-ar/ (redeploys on every push to `main` that touches `web/`)
 
-## Run it
+The web app is in [`web/`](web), and the optional AI proxy is in [`proxy/`](proxy). The earlier native StereoKit/C# version is still in `src/` and `app/` ([details below](#legacy-stereokit-c-version)).
+
+## Run it locally
 
 ```bash
 python3 web/serve.py
 ```
 
-Then open http://localhost:5173. `serve.py` is a tiny static server with caching turned off, so edits show up on reload. Any static server works.
+Then open http://localhost:5173. `serve.py` is a tiny static server with caching turned off, so edits show up on reload.
 
-**On a headset or phone:** WebXR only runs over **HTTPS** (localhost is the one exception). Host the `web/` folder on any HTTPS static host, for example GitHub Pages, Netlify or a university web server. Open the URL in Edge on HoloLens 2 (or Quest Browser, or Android Chrome) and tap **Enter AR**. The views gather around you. Point with your hand ray (HoloLens), controller (Quest) or finger (phone), then air-tap, pull the trigger or tap to select.
+**On a headset or phone:** WebXR only runs over **HTTPS** (localhost is the one exception), so use the live site or any HTTPS static host. Open the URL in Edge on HoloLens 2 (or Quest Browser, or Android Chrome) and tap **Enter AR**. The views gather around you. Point with your hand ray (HoloLens), controller (Quest) or finger (phone), then air-tap, pull the trigger or tap to select. Set up **AI settings** *before* entering AR, because the page controls aren't reachable inside a headset session.
 
 ## What's in it
 
-| Category | Dataset (built-in sample) | Views |
-|---|---|---|
-| Measurement | NMOS output curves (I_D–V_DS, 5 gate voltages) | 2D plot, nearest-point readout |
-| Measurement | 300 mm sheet-resistance wafer map (512 dies) | 3D bar map, out-of-spec caps, mean / σ / CV / uniformity / in-spec % |
-| Measurement | MOS capacitor C–V (from `web/data/mos_cv.csv`) | 2D plot |
-| Simulation | MOSFET cross-section potential (Laplace solve) | heatmap + contours, 3D surface |
-| Simulation | MOSFET electric field \|E\| (peaks at the drain edge) | heatmap + contours, 3D surface |
-| Simulation | Die thermal map (4 CPU cores + GPU, 85 °C throttle contour) | heatmap + contours, 3D surface |
-| Quality | Litho process window (CD vs focus × dose, 43/47 nm spec contours) | contour map, 3D surface |
-| Quality | Gate-CD SPC chart (60 lots, baseline limits, excursion + drift) | control chart, Western Electric rules 1–4, Cp / Cpk / Ppk |
+| Category | Dataset (built-in sample) | Views | Explode separates |
+|---|---|---|---|
+| Measurement | NMOS output curves (I_D–V_DS, 5 gate voltages) | 2D plot | each curve onto its own layer |
+| Measurement | 300 mm sheet-resistance wafer map (512 dies) | 3D bar map with stats | dies spread apart; out-of-spec dies lift up |
+| Measurement | MOS capacitor C–V (from `web/data/mos_cv.csv`) | 2D plot | each curve |
+| Simulation | MOSFET cross-section potential (Laplace solve) | heatmap + contours, 3D surface | heatmap / iso-lines; surface tiers |
+| Simulation | MOSFET electric field \|E\| (peaks at the drain edge) | heatmap + contours, 3D surface | heatmap / iso-lines; surface tiers |
+| Simulation | Die thermal map (4 CPU cores + GPU, 85 °C threshold) | heatmap + contours, 3D surface | heatmap / iso-lines / threshold; surface tiers |
+| Quality | Litho process window (CD vs focus × dose, 43/47 nm spec) | contour map, 3D surface | heatmap / iso-lines / spec limits |
+| Quality | Gate-CD SPC chart (60 lots, baseline limits, excursion + drift) | control chart, WE rules 1–4, Cp / Cpk / Ppk | control limits / spec limits / data / violations |
 
-**Interaction (same in the browser and in AR)**
-- **Dashboard panel:** a button per view type. **Arrange around me** gathers every open view on an arc in front of you.
-- **Moving views:** drag a panel by its title bar, or a 3D view by its base plate. It turns to face you.
-- **Reading values:** point at a plot, heatmap, surface or die to read the value under the pointer.
-- **2D field panels:** heatmap and contour toggles, contour levels, colormap, and **Open 3D surface**.
-- **3D surfaces:** height scale, contour lines on the surface and/or the floor, and a colourbar the same height as the surface.
-- **Desktop only:** drag empty space to orbit, scroll to zoom.
+**Moving and reading the data (same with a mouse, hand ray, controller or finger)**
+- **Move:** drag a panel by its title bar, or a 3D view by its base plate. It turns to face you.
+- **Scale:** the **−** and **+** buttons in each title bar. On desktop, you can also scroll over a view.
+- **Rotate:** the ⟲ ⟳ buttons on 3D surfaces and the wafer map.
+- **Explode:** the **Explode** button on any view, **Explode all** on the dashboard or AI panel, or say "explode the wafer map". The layers animate apart into a labelled 3D stack and back.
+- **Read values:** point at a plot, heatmap, surface or die to read the value under the pointer.
+- **Dashboard:** a button per view type, plus **Arrange around me**, which gathers every open view on an arc in front of you.
+- **Desktop only:** drag empty space to orbit, scroll elsewhere to zoom.
 
-**Colour on HoloLens:** the display is additive, so black renders as transparent. The default **Holo** and **Holo Diverging** colormaps keep a lifted minimum brightness. Viridis and Inferno are there for screenshots.
+## AI analyst (voice)
 
-**Analytics:** opening a view and inspecting values log `[xAPI] …` lines to the console. The hook is the `xapi()` function in `web/js/main.js`; point it at your LRS.
+Talk with the **mic** button in the ask bar, or with **Talk** / **Hands-free** on the in-room **AI Analyst** panel (works in AR). You can also type in the ask bar. Answers appear on the panel and are read aloud.
+
+- **Commands work with no setup and offline**, for example "explode all", "collapse the control chart", "open the thermal map in 3D", "close the wafer map", "arrange", "make it bigger", "rotate left". "It" or "this" means the view you last touched.
+- **Questions need Claude** (`claude-opus-5-5`), for example "Where is the hottest spot on the die?", "Is the gate CD process capable?", "Which wafer region is out of spec?" or "Compare the high-frequency and quasi-static C–V curves". Claude answers from compact summaries of every dataset, and can also open, explode, recolour and arrange views itself.
+- **Connecting Claude:** open **AI settings** and either:
+  - paste **your own Anthropic API key**. It is stored only in that browser (optionally remembered) and sent only to Anthropic. Fine for your own device; don't do it on shared computers; or
+  - paste a **proxy URL**. This is recommended for classes: the key stays on a server you control, so students need nothing. Deploy it from [`proxy/`](proxy) in about 5 minutes.
+- **Browser support for voice:** Chrome and Edge (desktop, Android, and Edge on HoloLens 2) support speech recognition. Firefox doesn't, but typing works everywhere.
+- **Code:** the analyst lives in `web/js/ai/`. `analyst.js` holds the local command parser, the Claude tool loop and an offline fallback; `summaries.js` holds the data context; `voice.js` handles speech in and out.
+
+## Colours and type
+
+The UI follows the **Operation SEMI / MI-CHIPS presentation color system** (C01–C12), defined as `PALETTE` in `web/js/render/chart.js`.
+
+- **Surfaces:** Deep Academic Slate surfaces with Night Slate title bars.
+- **Text:** white headlines, Body Silver body text, Advisor Blue Gray eyebrow labels and Caption Frost captions.
+- **Accents:** Trojan Blue for primary actions and value tags, Technology Ice Blue for live highlights and pointer rays. Precision Orange appears only as a small accent: title rules, active-state dots, spec limits and out-of-spec markers.
+- **Type:** Inter throughout.
+
+**Data colours:** **MI-CHIPS Ice** (Trojan Blue → Ice Blue → Caption Frost) for sequential data, and **MI-CHIPS Diverging** (Trojan Blue → Frost → Orange) for data around a midpoint. **Holo** maps (higher minimum brightness, good in bright rooms on HoloLens' additive display), Viridis and Inferno are one click away.
+
+**Analytics:** opening views, inspecting values and asking questions log `[xAPI] …` lines to the console. The hook is the `xapi()` function in `web/js/main.js`; point it at your LRS.
 
 **Sample data:** the built-in datasets are deterministic, teaching-grade models. They are not calibrated TCAD or metrology results.
 
@@ -60,18 +84,18 @@ Common keys: `title`, `description`, `source`, `category` (measurement | simulat
 
 ```
 web/
-  index.html, css/style.css     page shell (header: Import CSV, Arrange, Enter AR)
+  index.html, css/style.css     page shell: header, ask bar + mic, AI settings dialog
   serve.py                      no-cache local dev server
   data/                         bundled CSVs + index.json
-  js/main.js                    scene, pointer input (mouse + XR hands/controllers), view placement, CSV import, WebXR session
-  js/data/datasets.js           models, wafer stats, SPC (baseline limits, WE rules, Cp/Cpk/Ppk)
-  js/data/samples.js            built-in sample datasets
-  js/data/csv.js                CSV parser
-  js/render/                    colormaps, marching-squares contours, chart frame/ticks, CanvasPanel + sprite labels
-  js/views/                     dashboard, plot, field (2D), control chart, surface (3D), wafer map (3D)
+  js/main.js                    scene, pointer input (mouse + XR hands/controllers), placement, scale/explode actions, CSV import, WebXR
+  js/data/                      dataset models + SPC/wafer stats, built-in samples, CSV parser
+  js/render/                    MI-CHIPS palette + chart frame, colormaps, contours, CanvasPanel (layers + explode), labels
+  js/views/                     dashboard, AI panel, plot, field (2D), control chart, surface (3D), wafer map (3D)
+  js/ai/                        analyst (commands + Claude tools), dataset summaries, voice in/out
+proxy/                          Cloudflare Worker that holds the Anthropic key for classroom use
 ```
 
-three.js 0.160.0 loads from the jsDelivr CDN through an import map. There is no build step. For offline lab use, download `three.module.js` and the `examples/jsm` folder into `web/vendor/` and point the import map there.
+three.js 0.160.0 and (on first AI question) the Anthropic SDK 1.3.0 load from the jsDelivr CDN, and Inter from Google Fonts. There is no build step. For offline lab use, download `three.module.js` and the `examples/jsm` folder into `web/vendor/` and point the import map there.
 
 ---
 
