@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Shared MI-CHIPS trainer core + equipment modules. netstandard2.0 so both the desktop simulator head (net8)
+       and the HoloLens 2 UWP head can reference it. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>MiChips.Cleanroom</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="StereoKit" Version="0.3.9" />
+  </ItemGroup>
+</Project>

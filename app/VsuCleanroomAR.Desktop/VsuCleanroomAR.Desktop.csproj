@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Desktop head: runs the StereoKit flatscreen simulator (Windows/Linux), or
+       Windows Mixed Reality / Holographic Remoting if an OpenXR runtime is active. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Lab data CSVs (and optional CAD) are copied next to the exe and loaded at startup. -->
+    <None Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MiChips.Cleanroom\MiChips.Cleanroom.csproj" />
+  </ItemGroup>
+</Project>

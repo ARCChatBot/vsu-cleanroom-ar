@@ -1,0 +1,10 @@
+<!--
+  Merge into the <Capabilities> element of the UWP head's Package.appxmanifest.
+  (The uap2 namespace must be declared on <Package>: xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2")
+-->
+<Capabilities>
+  <Capability Name="internetClient" />
+  <uap2:Capability Name="spatialPerception" />   <!-- spatial anchors + anchor persistence -->
+  <DeviceCapability Name="webcam" />             <!-- QR code detection (PV camera) -->
+  <DeviceCapability Name="gazeInput" />          <!-- optional: eye gaze -->
+</Capabilities>

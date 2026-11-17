@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MI-CHIPS Lab Data AR</title>
+  <meta name="description" content="Web-based AR visualization of microelectronics lab data: measurements, simulation fields and quality metrics. VSU MI-CHIPS, NSF Award #2606117." />
+  <link rel="stylesheet" href="css/style.css?v=2" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <span class="mark">MI-CHIPS</span>
+      <span class="name">Lab Data AR</span>
+    </div>
+    <div class="actions">
+      <label class="btn" title="Load CSV files (or drop them anywhere on the page)">
+        Import CSV
+        <input id="csv-input" type="file" accept=".csv,text/csv" multiple hidden />
+      </label>
+      <button id="arrange-btn" class="btn">Arrange</button>
+      <button id="xr-btn" class="btn primary" disabled>Checking AR…</button>
+    </div>
+  </header>
+
+  <div id="hint" class="hint">Drag to orbit · scroll to zoom · drag a panel's title bar to move it · point at data to read values</div>
+  <div id="drop" class="drop" hidden>Drop CSV files to add datasets</div>
+  <div id="toast" class="toast" hidden></div>
+  <noscript>This app needs JavaScript and WebGL.</noscript>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
