@@ -506,15 +506,38 @@ async function setupXrButton() {
   xrBtn.textContent = xrMode === 'immersive-ar' ? 'Enter AR' : 'Enter VR';
   xrBtn.disabled = false;
 }
+const xrLabel = () => (xrMode === 'immersive-ar' ? 'Enter AR' : 'Enter VR');
+let xrSession = null, xrStarting = false;
 xrBtn.addEventListener('click', async () => {
-  if (renderer.xr.isPresenting) { renderer.xr.getSession().end(); return; }
+  if (xrSession) { xrSession.end().catch(() => {}); return; }
+  if (xrStarting) return; // ignore double taps while a session is starting
+  xrStarting = true;
+  xrBtn.disabled = true;
+  xrBtn.textContent = 'Starting…';
+  let session = null;
   try {
-    const session = await navigator.xr.requestSession(xrMode, {
+    session = await navigator.xr.requestSession(xrMode, {
       optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'],
       domOverlay: { root: document.body },
     });
+    // HoloLens 2 may not grant 'local-floor': probe it and fall back to 'local' (head-relative origin).
+    let space = 'local-floor';
+    try { await session.requestReferenceSpace('local-floor'); } catch { space = 'local'; }
+    renderer.xr.setReferenceSpaceType(space);
+    floor.position.y = space === 'local' ? -1.6 : 0; // only visible in VR; keeps the grid near the real floor
+    session.addEventListener('end', () => { xrSession = null; });
     await renderer.xr.setSession(session);
-  } catch (e) { toast('Could not start XR: ' + e.message); }
+    xrSession = session;
+  } catch (e) {
+    session?.end().catch(() => {}); // never leave a half-started session open
+    toast(e.name === 'InvalidStateError'
+      ? 'An earlier AR session is still open. Reload this page, then tap Enter AR again.'
+      : `Could not start AR: ${e.message}`);
+  } finally {
+    xrStarting = false;
+    xrBtn.disabled = false;
+    if (!xrSession) xrBtn.textContent = xrLabel();
+  }
 });
 
 let arrangeNextFrames = 0;
@@ -528,7 +551,9 @@ renderer.xr.addEventListener('sessionstart', () => {
 renderer.xr.addEventListener('sessionend', () => {
   scene.background = BG;
   floor.visible = true;
-  xrBtn.textContent = xrMode === 'immersive-ar' ? 'Enter AR' : 'Enter VR';
+  floor.position.y = 0;
+  xrSession = null;
+  xrBtn.textContent = xrLabel();
   camera.position.set(0, 1.6, 1.25);
   controls.target.set(0, 1.35, 0);
   controls.update();
