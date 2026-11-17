@@ -260,6 +260,12 @@ function processPointer(p) {
   if (p.hover && p.hover !== target) p.hover.onLeave?.();
   p.hover = target;
   if (target) target.onHover?.(hit);
+  if (p.pressed && !target && p.id !== 'mouse') {
+    // Double air-tap (or trigger) on empty space: bring every view back in front of you.
+    const now = performance.now();
+    if (now - (p.lastEmptyTap || 0) < 700) { arrange(); p.lastEmptyTap = 0; }
+    else p.lastEmptyTap = now;
+  }
   if (p.pressed && target) {
     const r = target.onDown?.(hit);
     if (hit.object.userData.view) setFocus(hit.object.userData.view);
@@ -540,15 +546,18 @@ xrBtn.addEventListener('click', async () => {
   }
 });
 
-let arrangeNextFrames = 0;
+// Views are placed only once the headset reports real head poses (HoloLens can take a moment),
+// then once more after tracking settles.
+let xrPoseFrames = -1, placedOnce = false;
 renderer.xr.addEventListener('sessionstart', () => {
   const ar = xrMode === 'immersive-ar';
   scene.background = ar ? null : BG;
   floor.visible = !ar;
   xrBtn.textContent = 'Exit';
-  arrangeNextFrames = 3; // wait for a valid head pose, then gather views around the user
+  xrPoseFrames = 0; placedOnce = false; // start counting frames with a valid head pose
 });
 renderer.xr.addEventListener('sessionend', () => {
+  xrPoseFrames = -1;
   scene.background = BG;
   floor.visible = true;
   floor.position.y = 0;
@@ -582,10 +591,15 @@ setupXrButton();
 window.__michips = { app, scene, camera, ask }; // handy for debugging in the console
 
 const clock = new THREE.Clock();
-renderer.setAnimationLoop(() => {
+renderer.setAnimationLoop((time, frame) => {
   const dt = Math.min(clock.getDelta(), 0.1);
   if (!renderer.xr.isPresenting) controls.update();
-  if (arrangeNextFrames > 0 && --arrangeNextFrames === 0) arrange();
+  if (xrPoseFrames >= 0 && frame) {
+    const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
+    if (pose) xrPoseFrames += pose.emulatedPosition ? 0.2 : 1; // estimated-only poses still place views within ~1 s
+    if (!placedOnce && xrPoseFrames >= 10) { arrange(); placedOnce = true; } // first real poses: gather views in front
+    if (xrPoseFrames >= 120) { arrange(); xrPoseFrames = -1; }               // ~2 s later, once tracking has settled
+  }
 
   updateXrPointers();
   for (const p of pointers.values()) {
