@@ -103,9 +103,17 @@ export class WaferView {
     this.badLabel.material.opacity = e;
   }
 
+  dieColor(i, c = new THREE.Color()) {
+    const w = this.dataset, d = w.dies[i];
+    return i === this.hovered ? c.set(PALETTE.white) : c.setRGB(...this.cmap.rgb((d.value - w.min) / (w.max - w.min)));
+  }
+
   setHover(i) {
     if (i === this.hovered || i == null) return;
+    const prev = this.hovered;
     this.hovered = i;
+    for (const k of [prev, i]) if (k >= 0) this.bars.setColorAt(k, this.dieColor(k));
+    this.bars.instanceColor.needsUpdate = true;
     const w = this.dataset;
     if (this.valueLabel) { disposeObject(this.valueLabel); this.content.remove(this.valueLabel); this.valueLabel = null; }
     if (i >= 0) {
@@ -116,7 +124,6 @@ export class WaferView {
       this.readout = `Die (${d.col}, ${d.row}) at (${d.x.toFixed(0)}, ${d.y.toFixed(0)}) mm  →  ${w.quantity} = ${d.value.toFixed(2)} ${w.unit}${inSpec(w, d.value) ? '' : '   OUT OF SPEC'}`;
       this.onInspect?.(this.readout);
     } else this.readout = 'Point at a die to read it';
-    this.layout();
     this.panel.dirty = true;
   }
 

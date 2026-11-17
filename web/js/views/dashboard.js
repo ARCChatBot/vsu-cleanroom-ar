@@ -30,7 +30,7 @@ export class Dashboard extends CanvasPanel {
   draw(ctx) {
     const app = this.app, W = this.W;
     this.eyebrow('Operation SEMI / MI-CHIPS', 22, 80);
-    let y = this.paragraph('Measurements, simulation fields and quality metrics as charts, contour maps and 3D renderings. Grab title bars or base plates to move views, use Explode to separate layers, and ask the AI analyst by voice. In AR, double air-tap empty space to bring every view in front of you.', 22, 108, W - 44, { size: 19 }) + 6;
+    let y = this.paragraph('Measurements, simulation fields and quality metrics as charts, contour maps and 3D renderings. Grab title bars or base plates to move views, use Explode to separate layers, and ask the AI analyst by voice. In AR, point at empty space and air-tap and hold for a second to bring every view in front of you; you can also poke panel buttons with a fingertip.', 22, 108, W - 44, { size: 19 }) + 6;
 
     for (const cat of CATEGORIES) {
       const list = app.datasets.filter((d) => d.category === cat);

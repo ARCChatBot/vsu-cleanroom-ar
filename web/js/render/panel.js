@@ -24,6 +24,9 @@ const LAYER_SHIFT_Y = 0.012;
 export const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
 export class CanvasPanel {
+  /** Panel re-renders allowed this frame (the host lowers it in a headset to avoid stutter). */
+  static redrawBudget = 99;
+
   constructor({ title, width, height, closable = true, draggable = true, explodable = false, scalable = true }) {
     this.title = title;
     this.closable = closable;
@@ -37,7 +40,9 @@ export class CanvasPanel {
     this.ctx = this.canvas.getContext('2d');
 
     this.texture = makeTexture(this.canvas);
-    const mat = new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, side: THREE.DoubleSide });
+    // Opaque with alpha-test (only the rounded corners are cut out): opaque panels sort correctly
+    // in depth, which avoids the flicker that see-through panels cause in the headset.
+    const mat = new THREE.MeshBasicMaterial({ map: this.texture, transparent: false, alphaTest: 0.5, side: THREE.DoubleSide });
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, height), mat);
     this.mesh.userData.target = this;
 
@@ -90,7 +95,7 @@ export class CanvasPanel {
     const { width, height } = this.mesh.geometry.parameters;
     this.layers.forEach((l, i) => {
       const k = i + 1;
-      l.mesh.position.set(e * LAYER_SHIFT_X * k, e * LAYER_SHIFT_Y * k, 0.0012 * k + e * LAYER_GAP_Z * k);
+      l.mesh.position.set(e * LAYER_SHIFT_X * k, e * LAYER_SHIFT_Y * k, 0.003 * k + e * LAYER_GAP_Z * k);
       // Label just outside each layer's right edge, stepping down so the tags never overlap.
       const lw = l.label.scale.x;
       l.label.position.set(width / 2 + lw / 2 + 0.015 + e * LAYER_SHIFT_X * k, height / 2 - 0.2 - 0.03 * i + e * LAYER_SHIFT_Y * k, l.mesh.position.z + 0.004);
@@ -105,7 +110,8 @@ export class CanvasPanel {
       this.explodeT = this.explodeTarget > this.explodeT ? Math.min(1, this.explodeT + step) : Math.max(0, this.explodeT - step);
       this.applyExplode();
     }
-    if (!this.dirty) return;
+    if (!this.dirty || CanvasPanel.redrawBudget <= 0) return; // over budget: redraw on a later frame
+    CanvasPanel.redrawBudget--;
     this.dirty = false;
     this.redraw();
   }

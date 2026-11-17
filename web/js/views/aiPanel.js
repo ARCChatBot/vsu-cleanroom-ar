@@ -15,7 +15,7 @@ export class AiPanel extends CanvasPanel {
     this.interactables = [this.mesh];
     this.state = 'idle';     // idle | listening | thinking | error
     this.heard = '';
-    this.answer = 'Ask about the data by voice, for example: "Where is the hottest spot on the die?", "Is the gate CD process capable?", or "Explode the wafer map." Lost a view? Say "arrange" or double air-tap empty space.';
+    this.answer = 'Ask about the data by voice, for example: "Where is the hottest spot on the die?", "Is the gate CD process capable?", or "Explode the wafer map." Lost a view? Say "arrange", or air-tap and hold on empty space.';
     this.mode = '';
   }
 

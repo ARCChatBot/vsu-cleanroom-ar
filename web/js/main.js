@@ -23,6 +23,7 @@ import { ControlChartView } from './views/controlChartView.js';
 import { SurfaceView } from './views/surfaceView.js';
 import { WaferView } from './views/waferView.js';
 import { Dashboard } from './views/dashboard.js';
+import { CanvasPanel } from './render/panel.js';
 import { AiPanel } from './views/aiPanel.js';
 import { Analyst, loadSettings, saveSettings, aiConfigured } from './ai/analyst.js';
 import { Voice, speak, stopSpeaking, voiceSupported } from './ai/voice.js';
@@ -58,7 +59,7 @@ floor.material.transparent = true;
 floor.material.opacity = 0.7;
 scene.add(floor);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.05, 30); // near/far also set the headset depth range
 camera.position.set(0, 1.6, 1.25);
 
 // ---------------------------------------------------------------------------------
@@ -147,8 +148,9 @@ const app = {
 };
 
 function scaleRoot(root, f) {
-  const s = THREE.MathUtils.clamp(root.scale.x * f, 0.35, 3.5);
-  root.scale.setScalar(s);
+  const k = root.scale.x / (root.userData.userScale ?? 1); // current XR multiplier
+  root.userData.userScale = THREE.MathUtils.clamp((root.userData.userScale ?? 1) * f, 0.35, 3.5);
+  root.scale.setScalar(root.userData.userScale * k);
 }
 
 // ---------------------------------------------------------------------------------
@@ -214,32 +216,51 @@ controls.target.set(0, 1.35, 0);
 controls.enableDamping = true;
 controls.update();
 
-// XR controllers (on HoloLens 2 these are the articulated-hand target rays)
+// XR controllers (on HoloLens 2 these are the articulated-hand target rays).
+// Each gets a world-space ray line and a cursor ring drawn from the *smoothed* ray.
 const tmpM = new THREE.Matrix4();
+let selectsSeen = 0;
 const xrControllers = [0, 1].map((i) => {
   const c = renderer.xr.getController(i);
   const line = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
-    new THREE.LineBasicMaterial({ color: PALETTE.iceBlue, transparent: true, opacity: 0.85 }));
-  line.visible = false;
-  c.add(line);
-  c.userData.line = line;
-  c.addEventListener('connected', () => { c.userData.connected = true; line.visible = true; });
-  c.addEventListener('disconnected', () => { c.userData.connected = false; line.visible = false; getPointer('xr' + i).active = false; });
-  c.addEventListener('selectstart', () => { getPointer('xr' + i).pressed = true; });
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: PALETTE.iceBlue, transparent: true, opacity: 0.8, depthTest: false }));
+  line.frustumCulled = false;
+  line.renderOrder = 20;
+  const cursor = new THREE.Mesh(new THREE.RingGeometry(0.007, 0.012, 24),
+    new THREE.MeshBasicMaterial({ color: PALETTE.iceBlue, transparent: true, depthTest: false, side: THREE.DoubleSide }));
+  cursor.renderOrder = 21;
+  line.visible = cursor.visible = false;
+  scene.add(line, cursor);
+  c.userData = { line, cursor, connected: false };
+  c.addEventListener('connected', (e) => {
+    c.userData.connected = true;
+    const src = e.data;
+    logDiag(`input ${i}: ${src?.handedness || '?'} ${src?.targetRayMode || '?'} ${src?.profiles?.[0] || ''}${src?.hand ? ' (hand joints)' : ''}`);
+  });
+  c.addEventListener('disconnected', () => { c.userData.connected = false; line.visible = cursor.visible = false; getPointer('xr' + i).active = false; });
+  c.addEventListener('selectstart', () => { getPointer('xr' + i).pressed = true; if (selectsSeen++ < 2) logDiag(`select received (input ${i})`); });
   c.addEventListener('selectend', () => { getPointer('xr' + i).released = true; });
   scene.add(c);
   return c;
 });
 
+const rawO = new THREE.Vector3(), rawD = new THREE.Vector3();
 function updateXrPointers() {
   xrControllers.forEach((c, i) => {
     const p = getPointer('xr' + i);
-    p.active = !!c.userData.connected;
-    if (!p.active) return;
+    p.active = !!c.userData.connected && renderer.xr.isPresenting;
+    if (!p.active) { p.history = []; return; }
+    c.updateMatrixWorld(true);
     tmpM.identity().extractRotation(c.matrixWorld);
-    p.ray.origin.setFromMatrixPosition(c.matrixWorld);
-    p.ray.direction.set(0, 0, -1).applyMatrix4(tmpM).normalize();
+    rawO.setFromMatrixPosition(c.matrixWorld);
+    rawD.set(0, 0, -1).applyMatrix4(tmpM).normalize();
+    // Low-pass filter: hand rays jitter, which makes buttons hard to hit and drags shaky.
+    if (!p.history?.length) { p.ray.origin.copy(rawO); p.ray.direction.copy(rawD); p.history = []; }
+    else { p.ray.origin.lerp(rawO, 0.5); p.ray.direction.lerp(rawD, 0.3).normalize(); }
+    // Keep ~100 ms of rays: a pinch pulls the hand, so presses use where you aimed just before.
+    p.history.push(p.ray.clone());
+    if (p.history.length > 7) p.history.shift();
   });
 }
 
@@ -249,30 +270,79 @@ function processPointer(p) {
   if (p.drag) {
     const point = p.ray.at(p.drag.dist, new THREE.Vector3());
     p.drag.root.position.copy(point.add(p.drag.offset));
-    if (p.drag.face) faceViewer(p.drag.root);
+    if (p.drag.face) faceViewer(p.drag.root, true);
     if (p.released) p.drag = null;
     p.pressed = p.released = false;
     return null;
   }
 
-  const hit = hitAt(p.ray);
+  const aimRay = p.pressed && p.history?.length > 5 ? p.history[0] : p.ray; // pre-pinch aim for presses
+  const hit = hitAt(aimRay);
   const target = hit?.object.userData.target ?? null;
   if (p.hover && p.hover !== target) p.hover.onLeave?.();
   p.hover = target;
   if (target) target.onHover?.(hit);
-  if (p.pressed && !target && p.id !== 'mouse') {
-    // Double air-tap (or trigger) on empty space: bring every view back in front of you.
-    const now = performance.now();
-    if (now - (p.lastEmptyTap || 0) < 700) { arrange(); p.lastEmptyTap = 0; }
-    else p.lastEmptyTap = now;
+
+  // Air-tap and HOLD (~0.8 s) on empty space: bring every view back in front of you.
+  if (p.pressed && !target && p.id !== 'mouse') p.emptySince = performance.now();
+  if (p.released && p.emptySince) {
+    if (!target && performance.now() - p.emptySince > 800) arrange();
+    p.emptySince = 0;
   }
   if (p.pressed && target) {
+    p.emptySince = 0;
     const r = target.onDown?.(hit);
     if (hit.object.userData.view) setFocus(hit.object.userData.view);
     if (r?.dragRoot) p.drag = { root: r.dragRoot, face: r.face, dist: hit.distance, offset: r.dragRoot.position.clone().sub(hit.point) };
   }
   p.pressed = p.released = false;
   return hit;
+}
+
+/** Draws the ray line and cursor ring for an XR pointer. */
+function drawPointer(i, hit) {
+  const { line, cursor } = xrControllers[i].userData;
+  const p = getPointer('xr' + i);
+  if (!p.active) { line.visible = cursor.visible = false; return; }
+  const end = hit ? hit.point : p.ray.at(1.5, new THREE.Vector3());
+  line.geometry.setFromPoints([p.ray.origin, end]);
+  line.visible = true;
+  cursor.visible = !!hit;
+  if (hit) {
+    cursor.position.copy(hit.point);
+    camera.getWorldPosition(camPos);
+    cursor.lookAt(camPos);
+    cursor.material.color.set(p.drag ? PALETTE.orange : PALETTE.iceBlue);
+  }
+}
+
+// ---- Direct touch: poke panels with an index fingertip (needs hand tracking) ----
+const hands = [0, 1].map((i) => { const h = renderer.xr.getHand(i); scene.add(h); return h; });
+const tipW = new THREE.Vector3(), tipL = new THREE.Vector3();
+function updatePokes() {
+  hands.forEach((hand, i) => {
+    const p = getPointer('poke' + i);
+    const tip = hand.joints?.['index-finger-tip'];
+    if (!renderer.xr.isPresenting || !tip || !tip.visible) { if (p.hover) { p.hover.onLeave?.(); p.hover = null; } p.touching = false; return; }
+    tip.getWorldPosition(tipW);
+    let best = null;
+    for (const m of interactiveMeshes()) {
+      const g = m.geometry?.parameters;
+      if (!g || g.width == null || m.geometry.type !== 'PlaneGeometry') continue; // panels only
+      tipL.copy(tipW); m.worldToLocal(tipL);
+      if (Math.abs(tipL.x) > g.width / 2 || Math.abs(tipL.y) > g.height / 2 || tipL.z < -0.03 || tipL.z > 0.05) continue;
+      if (!best || Math.abs(tipL.z) < Math.abs(best.z)) best = { m, z: tipL.z, uv: new THREE.Vector2(tipL.x / g.width + 0.5, tipL.y / g.height + 0.5), point: tipW.clone() };
+    }
+    const target = best?.m.userData.target ?? null;
+    if (p.hover && p.hover !== target) p.hover.onLeave?.();
+    p.hover = target;
+    if (!best) { p.touching = false; return; }
+    const hit = { object: best.m, uv: best.uv, point: best.point, distance: 0 };
+    target.onHover?.(hit);
+    // Press when the fingertip pushes through the surface; re-arm once it backs off (hysteresis).
+    if (!p.touching && best.z < 0.004) { p.touching = true; target.onDown?.(hit); if (best.m.userData.view) setFocus(best.m.userData.view); }
+    else if (p.touching && best.z > 0.015) p.touching = false;
+  });
 }
 
 function setFocus(v) {
@@ -295,9 +365,10 @@ function viewerPose() {
   return { pos: camPos.clone(), fwd: camDir.clone() };
 }
 
-function faceViewer(root) {
+function faceViewer(root, steady = false) {
   camera.getWorldPosition(camPos);
-  const target = root.userData.yawOnly ? new THREE.Vector3(camPos.x, root.position.y, camPos.z) : camPos;
+  // While dragging, turn only around the vertical axis: tilting with every hand wobble looks glitchy.
+  const target = root.userData.yawOnly || steady ? new THREE.Vector3(camPos.x, root.position.y, camPos.z) : camPos;
   root.lookAt(target); // Object3D.lookAt points +Z at the target; panels and 3D views face +Z
 }
 
@@ -317,16 +388,28 @@ function placeAt(root, angleDeg, dist, dy) {
   faceViewer(root);
 }
 
+// In AR everything sits ~1.4–1.6 m away: HoloLens clips holograms closer than ~0.8 m, and
+// 1.25–2 m is its comfortable viewing range. 2D panels get a little larger to stay readable.
+const XR_PANEL_SCALE = 1.3;
+function xrScale(root, is3D) {
+  const want = renderer.xr.isPresenting && !is3D ? XR_PANEL_SCALE : 1;
+  const base = root.userData.userScale ?? 1;
+  root.scale.setScalar(base * want);
+}
+
 function place(view, slot) {
   const inXR = renderer.xr.isPresenting;
-  const dist = (view.is3D ? 1.0 : 0.95) * (inXR ? 1 : 1.75) + Math.floor(slot / SLOTS.length) * 0.25;
-  placeAt(view.root, SLOTS[slot % SLOTS.length], dist, view.is3D ? (inXR ? -0.5 : -0.75) : -0.05);
+  const dist = (inXR ? (view.is3D ? 1.4 : 1.6) : (view.is3D ? 1.75 : 1.65)) + Math.floor(slot / SLOTS.length) * 0.3;
+  placeAt(view.root, SLOTS[slot % SLOTS.length], dist, view.is3D ? (inXR ? -0.45 : -0.75) : -0.05);
+  xrScale(view.root, view.is3D);
 }
 
 function placeSidePanels() {
   const inXR = renderer.xr.isPresenting;
-  placeAt(app.dashboard.root, DASH_ANGLE, inXR ? 0.85 : 1.6, -0.06);
-  placeAt(app.aiPanel.root, AI_ANGLE, inXR ? 0.85 : 1.6, -0.12);
+  placeAt(app.dashboard.root, DASH_ANGLE, inXR ? 1.5 : 1.6, -0.06);
+  placeAt(app.aiPanel.root, AI_ANGLE, inXR ? 1.5 : 1.6, -0.12);
+  xrScale(app.dashboard.root, false);
+  xrScale(app.aiPanel.root, false);
 }
 
 function createView(d, kind) {
@@ -613,14 +696,14 @@ window.addEventListener('pagehide', () => { if (xrSession) endXrSafely('page clo
 
 // Views are placed only once the headset reports real head poses (HoloLens can take a moment),
 // then once more after tracking settles.
-let xrPoseFrames = -1, placedOnce = false;
+let xrPoseFrames = -1;
 renderer.xr.addEventListener('sessionstart', () => {
   const blend = renderer.xr.getSession()?.environmentBlendMode || (xrMode === 'immersive-ar' ? 'alpha-blend' : 'opaque');
   const seeThrough = blend !== 'opaque'; // HoloLens = additive, phones/Quest AR = alpha-blend
   scene.background = seeThrough ? null : BG;
   floor.visible = !seeThrough;
   xrBtn.textContent = 'Exit';
-  xrPoseFrames = 0; placedOnce = false; // start counting frames with a valid head pose
+  xrPoseFrames = 0; selectsSeen = 0; // start counting frames with a valid head pose
   diag.active = true; loopErrors = 0;
   const sess = renderer.xr.getSession();
   logDiag(`session started (blend ${blend})`);
@@ -628,6 +711,7 @@ renderer.xr.addEventListener('sessionstart', () => {
 });
 renderer.xr.addEventListener('sessionend', () => {
   xrPoseFrames = -1;
+  for (const v of app.views) xrScale(v.root, v.is3D);
   diag.active = false;
   logDiag('session ended');
   scene.background = BG;
@@ -678,16 +762,17 @@ function frameStep(frame) {
   if (xrPoseFrames >= 0 && frame) {
     const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
     if (pose) xrPoseFrames += pose.emulatedPosition ? 0.2 : 1; // estimated-only poses still place views within ~1 s
-    if (!placedOnce && xrPoseFrames >= 10) { arrange(); placedOnce = true; } // first real poses: gather views in front
-    if (xrPoseFrames >= 120) { arrange(); xrPoseFrames = -1; }               // ~2 s later, once tracking has settled
+    if (xrPoseFrames >= 10) { arrange(); xrPoseFrames = -1; } // first real poses: gather views in front (once)
   }
 
   updateXrPointers();
   for (const p of pointers.values()) {
+    if (p.id.startsWith('poke')) continue;
     const hit = processPointer(p);
-    const line = p.id.startsWith('xr') ? xrControllers[+p.id.slice(2)].userData.line : null;
-    if (line) line.scale.z = hit ? hit.distance : 1.5;
+    if (p.id.startsWith('xr')) drawPointer(+p.id.slice(2), hit);
   }
+  updatePokes();
+  CanvasPanel.redrawBudget = renderer.xr.isPresenting ? 1 : 99; // headset: at most one panel re-render per frame
 
   app.dashboard.update(dt);
   app.aiPanel.update(dt);
@@ -698,7 +783,8 @@ function frameStep(frame) {
 // Report a previous AR session that crashed or never ended cleanly.
 try {
   const prev = JSON.parse(localStorage.getItem(DIAG_KEY) || 'null');
-  if (prev && (prev.active || prev.lines.some((l) => /error|lost|unhandled|repeated/.test(l)))) {
+  const noSelect = prev?.lines.some((l) => /^.{0,12}input /.test(l) || / input \d:/.test(l)) && !prev.lines.some((l) => /select received/.test(l));
+  if (prev && (prev.active || noSelect || prev.lines.some((l) => /error|lost|unhandled|repeated/.test(l)))) {
     toast(`Last AR session had a problem (send this to whoever maintains the app): ${prev.lines.slice(-6).join('  ·  ')}`, 45000);
   }
   localStorage.removeItem(DIAG_KEY);

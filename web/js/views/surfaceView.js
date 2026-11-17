@@ -194,14 +194,15 @@ export class SurfaceView {
     this.dropLine.geometry.setFromPoints([local, new THREE.Vector3(local.x, 0.001, local.z)]);
     this.marker.visible = this.dropLine.visible = true;
     const text = `${sig(val)} ${f.unit}`;
-    if (text !== this.valueText) {
+    const now = performance.now();
+    if (text !== this.valueText && now - (this.labelAt || 0) > 150) { // ≤ ~7 label rebuilds per second
+      this.labelAt = now;
       if (this.valueLabel) { disposeObject(this.valueLabel); this.content.remove(this.valueLabel); }
       this.valueLabel = makeLabel(text, { height: 0.02, color: PALETTE.white, bg: 'rgba(0,53,142,0.95)' });
       this.content.add(this.valueLabel);
       this.valueText = text;
     }
-    this.valueLabel.position.set(local.x, local.y + 0.03, local.z);
-    this.valueLabel.visible = true;
+    if (this.valueLabel) { this.valueLabel.position.set(local.x, local.y + 0.03, local.z); this.valueLabel.visible = true; }
     this.readout = `${f.xLabel} = ${sig(dataX(f, u), 3)},  ${f.yLabel} = ${sig(dataY(f, v), 3)}  →  ${f.quantity} = ${text}`;
     this.panel.dirty = true;
     this.onInspect?.(this.readout);
