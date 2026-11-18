@@ -604,13 +604,15 @@ let xrSession = null, xrStarting = false;
  * immersive-vr, which on an additive display like HoloLens still renders as see-through AR.
  */
 async function xrAttempts() {
-  const list = [
-    { mode: xrMode, init: { optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'], domOverlay: { root: document.body } } },
-    { mode: xrMode, init: { optionalFeatures: ['local-floor', 'hand-tracking'] } },
-    { mode: xrMode, init: {} },
-  ];
+  const list = SAFE_XR
+    ? [{ mode: xrMode, init: { optionalFeatures: ['local-floor'] } }, { mode: xrMode, init: {} }]
+    : [
+      { mode: xrMode, init: { optionalFeatures: ['local-floor', 'hand-tracking', 'dom-overlay'], domOverlay: { root: document.body } } },
+      { mode: xrMode, init: { optionalFeatures: ['local-floor', 'hand-tracking'] } },
+      { mode: xrMode, init: {} },
+    ];
   if (xrMode === 'immersive-ar' && await navigator.xr.isSessionSupported('immersive-vr').catch(() => false)) {
-    list.push({ mode: 'immersive-vr', init: { optionalFeatures: ['local-floor', 'hand-tracking'] } });
+    list.push({ mode: 'immersive-vr', init: { optionalFeatures: SAFE_XR ? ['local-floor'] : ['local-floor', 'hand-tracking'] } });
   }
   return list;
 }
@@ -671,6 +673,13 @@ xrBtn.addEventListener('click', async () => {
   }
 });
 
+// ---- AR safe mode: no hand tracking / finger poke. Use ?safe, or it turns on automatically
+//      after an AR session that froze or crashed (?full turns it back off). ----
+const SAFE_KEY = 'michips.xr.safe';
+const params = new URLSearchParams(location.search);
+if (params.has('full')) { try { localStorage.removeItem(SAFE_KEY); } catch { /* storage blocked */ } }
+let SAFE_XR = params.has('safe') || (() => { try { return localStorage.getItem(SAFE_KEY) === '1'; } catch { return false; } })();
+
 // ---- AR diagnostics: kept across reloads so a crash inside the headset can be reported ----
 const DIAG_KEY = 'michips.xr.diag';
 const diag = { lines: [], active: false };
@@ -706,7 +715,7 @@ renderer.xr.addEventListener('sessionstart', () => {
   xrPoseFrames = 0; selectsSeen = 0; // start counting frames with a valid head pose
   diag.active = true; loopErrors = 0;
   const sess = renderer.xr.getSession();
-  logDiag(`session started (blend ${blend})`);
+  logDiag(`session started (blend ${blend}${SAFE_XR ? ', safe mode' : ''})`);
   sess?.addEventListener('visibilitychange', () => logDiag(`visibility: ${sess.visibilityState}`));
 });
 renderer.xr.addEventListener('sessionend', () => {
@@ -748,44 +757,59 @@ window.__michips = { app, scene, camera, ask }; // handy for debugging in the co
 
 const clock = new THREE.Clock();
 let loopErrors = 0;
-renderer.setAnimationLoop((time, frame) => {
-  try { frameStep(frame); } catch (err) {
+const failed = new Set();
+/** Runs one part of the frame; a failure is logged once and never stops the frame from rendering. */
+function guard(name, fn) {
+  try { return fn(); } catch (err) {
     loopErrors++;
-    if (loopErrors <= 3) logDiag(`frame error: ${err.message}`);
-    if (loopErrors === 30 && xrSession) endXrSafely('repeated frame errors');
+    if (!failed.has(name)) {
+      failed.add(name);
+      logDiag(`${name} failed: ${err.message} ${(err.stack || '').split('\n')[1]?.trim() || ''}`);
+    }
+    return undefined;
+  }
+}
+
+renderer.setAnimationLoop((time, frame) => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  guard('controls', () => { if (!renderer.xr.isPresenting) controls.update(); });
+  guard('placement', () => {
+    if (xrPoseFrames >= 0 && frame) {
+      const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
+      if (pose) xrPoseFrames += pose.emulatedPosition ? 0.2 : 1; // estimated-only poses still place views within ~1 s
+      if (xrPoseFrames >= 10) { arrange(); xrPoseFrames = -1; } // first real poses: gather views in front (once)
+    }
+  });
+  guard('pointers', () => {
+    updateXrPointers();
+    for (const p of pointers.values()) {
+      if (p.id.startsWith('poke')) continue;
+      const hit = processPointer(p);
+      if (p.id.startsWith('xr')) drawPointer(+p.id.slice(2), hit);
+    }
+  });
+  if (!SAFE_XR) guard('poke', updatePokes);
+  CanvasPanel.redrawBudget = renderer.xr.isPresenting ? 1 : 99; // headset: at most one panel re-render per frame
+  guard('dashboard', () => app.dashboard.update(dt));
+  guard('ai panel', () => app.aiPanel.update(dt));
+  for (const v of app.views) guard(`view ${v.dataset.id}:${v.kind}`, () => v.update(dt));
+  // Always draw: a headset keeps showing its loading screen until the page submits frames.
+  try { renderer.render(scene, camera); } catch (err) {
+    if (!failed.has('render')) { failed.add('render'); logDiag(`render failed: ${err.message}`); }
+    if (++loopErrors > 120 && xrSession) endXrSafely('rendering keeps failing');
   }
 });
-
-function frameStep(frame) {
-  const dt = Math.min(clock.getDelta(), 0.1);
-  if (!renderer.xr.isPresenting) controls.update();
-  if (xrPoseFrames >= 0 && frame) {
-    const pose = frame.getViewerPose(renderer.xr.getReferenceSpace());
-    if (pose) xrPoseFrames += pose.emulatedPosition ? 0.2 : 1; // estimated-only poses still place views within ~1 s
-    if (xrPoseFrames >= 10) { arrange(); xrPoseFrames = -1; } // first real poses: gather views in front (once)
-  }
-
-  updateXrPointers();
-  for (const p of pointers.values()) {
-    if (p.id.startsWith('poke')) continue;
-    const hit = processPointer(p);
-    if (p.id.startsWith('xr')) drawPointer(+p.id.slice(2), hit);
-  }
-  updatePokes();
-  CanvasPanel.redrawBudget = renderer.xr.isPresenting ? 1 : 99; // headset: at most one panel re-render per frame
-
-  app.dashboard.update(dt);
-  app.aiPanel.update(dt);
-  for (const v of app.views) v.update(dt);
-  renderer.render(scene, camera);
-}
 
 // Report a previous AR session that crashed or never ended cleanly.
 try {
   const prev = JSON.parse(localStorage.getItem(DIAG_KEY) || 'null');
   const noSelect = prev?.lines.some((l) => /^.{0,12}input /.test(l) || / input \d:/.test(l)) && !prev.lines.some((l) => /select received/.test(l));
   if (prev && (prev.active || noSelect || prev.lines.some((l) => /error|lost|unhandled|repeated/.test(l)))) {
-    toast(`Last AR session had a problem (send this to whoever maintains the app): ${prev.lines.slice(-6).join('  ·  ')}`, 45000);
+    if (prev.active && !SAFE_XR) { // froze or crashed: try the simpler AR setup next time
+      SAFE_XR = true;
+      try { localStorage.setItem(SAFE_KEY, '1'); } catch { /* storage blocked */ }
+    }
+    toast(`Last AR session had a problem${SAFE_XR ? ' (safe AR mode is now on)' : ''}. Send this to whoever maintains the app: ${prev.lines.slice(-6).join('  ·  ')}`, 45000);
   }
   localStorage.removeItem(DIAG_KEY);
 } catch { /* storage blocked */ }
