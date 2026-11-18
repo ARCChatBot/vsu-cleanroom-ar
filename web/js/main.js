@@ -23,12 +23,12 @@ import { ControlChartView } from './views/controlChartView.js';
 import { SurfaceView } from './views/surfaceView.js';
 import { WaferView } from './views/waferView.js';
 import { Dashboard } from './views/dashboard.js';
-import { CanvasPanel, easeInOut } from './render/panel.js';
+import { CanvasPanel, easeInOut, makeDynamicLabel } from './render/panel.js';
 import { FocusPanel } from './views/focusPanel.js';
 import { AiPanel } from './views/aiPanel.js';
 import { Analyst, loadSettings, saveSettings, aiConfigured } from './ai/analyst.js';
 import { Voice, speak, stopSpeaking, voiceSupported } from './ai/voice.js';
-import { requireSignIn, signOut } from './auth.js';
+import { requireSignIn, signOut, elapsedSeconds, formatDuration } from './auth.js';
 
 // Canvas text needs Inter loaded before the first panel draws.
 await Promise.race([
@@ -40,7 +40,11 @@ await Promise.race([
 const user = await requireSignIn();
 document.getElementById('user-name').textContent = `${user.first} ${user.last} · ${user.id}`;
 document.getElementById('user-chip').hidden = false;
-document.getElementById('signout-btn').addEventListener('click', () => signOut());
+document.getElementById('signout-btn').addEventListener('click', () => {
+  xapi('signed out', 'session', `total time ${formatDuration(elapsedSeconds(user))}`);
+  signOut();
+});
+const sessionClock = () => formatDuration(elapsedSeconds(user));
 
 // ---------------------------------------------------------------------------------
 //  Renderer, scene, camera
@@ -560,7 +564,7 @@ function enterFocus(v) {
   panel.root.scale.setScalar(ps);
   faceViewer(panel.root);
   scene.add(panel.root);
-  focus = { view: v, panel, saved };
+  focus = { view: v, panel, saved, since: Date.now() };
   setFocus(v);
   app.aiPanel.set({ mode: `focus: ${v.dataset.title}` });
   xapi('focused', v.dataset.id, v.kind);
@@ -568,8 +572,9 @@ function enterFocus(v) {
 
 function exitFocus() {
   if (!focus) return;
-  const { view, panel, saved } = focus;
+  const { view, panel, saved, since } = focus;
   focus = null;
+  xapi('unfocused', view.dataset.id, `after ${formatDuration(Math.round((Date.now() - since) / 1000))}`);
   for (const [root, st] of saved) {
     root.visible = true;
     if (root === view.root) tweenTo(root, st.p, st.q, st.s);
@@ -590,8 +595,8 @@ function arrange() {
 // Analytics hook: swap for an xAPI statement emitter (LRS) in the progression system.
 let lastXapi = '';
 function xapi(verb, id, detail) {
-  // Actor = the signed-in student (xAPI account form: VSU ID on valdosta.edu).
-  const line = `[xAPI] ${user.first} ${user.last} (${user.id}) ${verb} ${id}: ${detail}`;
+  // Actor = the signed-in student (xAPI account form: VSU ID on valdosta.edu); t+ = time since sign-in.
+  const line = `[xAPI] [t+${sessionClock()}] ${user.first} ${user.last} (${user.id}) ${verb} ${id}: ${detail}`;
   if (line !== lastXapi) { console.info(line); lastXapi = line; }
 }
 
@@ -834,6 +839,7 @@ window.addEventListener('pagehide', () => { if (xrSession) endXrSafely('page clo
 // Views are placed only once the headset reports real head poses (HoloLens can take a moment),
 // then once more after tracking settles.
 let xrPoseFrames = -1;
+let arSince = 0; // when the current AR session started (for its duration)
 renderer.xr.addEventListener('sessionstart', () => {
   const blend = renderer.xr.getSession()?.environmentBlendMode || (xrMode === 'immersive-ar' ? 'alpha-blend' : 'opaque');
   const seeThrough = blend !== 'opaque'; // HoloLens = additive, phones/Quest AR = alpha-blend
@@ -844,9 +850,13 @@ renderer.xr.addEventListener('sessionstart', () => {
   diag.active = true; loopErrors = 0;
   const sess = renderer.xr.getSession();
   logDiag(`session started (blend ${blend}${SAFE_XR ? ', safe mode' : ''})`);
+  arSince = Date.now();
+  xapi('entered AR', 'session', `blend ${blend}`);
   sess?.addEventListener('visibilitychange', () => logDiag(`visibility: ${sess.visibilityState}`));
 });
 renderer.xr.addEventListener('sessionend', () => {
+  if (arSince) xapi('exited AR', 'session', `after ${formatDuration(Math.round((Date.now() - arSince) / 1000))}`);
+  arSince = 0;
   xrPoseFrames = -1;
   for (const v of app.views) xrScale(v.root, v.is3D);
   diag.active = false;
@@ -883,6 +893,18 @@ open(app.datasets.find((d) => d.id === 'process-window'), '2D');
 open(app.datasets.find((d) => d.id === 'thermal'), '3D');
 loadBundledCsvs();
 setupXrButton();
+const clockTag = makeDynamicLabel({ height: 0.026, color: PALETTE.white, bg: 'rgba(0,53,142,0.95)', maxChars: 30 });
+app.dashboard.root.add(clockTag);
+function tickClock() {
+  const t = sessionClock();
+  document.getElementById('user-timer').textContent = t;
+  clockTag.setText(`${user.first} ${user.last} · ${t}`);
+  clockTag.position.set(0, app.dashboard.mesh.geometry.parameters.height / 2 + 0.03 + app.dashboard.mesh.position.y, 0.01);
+}
+tickClock();
+setInterval(tickClock, 1000);
+xapi('started', 'session', `session began ${user.sessionStart}`);
+
 window.__michips = { app, scene, camera, ask }; // handy for debugging in the console
 
 const clock = new THREE.Clock();

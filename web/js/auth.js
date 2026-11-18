@@ -44,15 +44,40 @@ function save(user, remember) {
   } catch { /* storage blocked: signed in for this page only */ }
 }
 
+const SESSION_KEY = 'michips.sessionStart';
+/**
+ * Start of the current visit. Survives page reloads (sessionStorage) but restarts when the
+ * browser is reopened, so a remembered sign-in doesn't count time from days ago.
+ */
+function sessionStart() {
+  try {
+    let t = sessionStorage.getItem(SESSION_KEY);
+    if (!t) { t = new Date().toISOString(); sessionStorage.setItem(SESSION_KEY, t); }
+    return t;
+  } catch { return new Date().toISOString(); }
+}
+
+/** Whole seconds since this visit's session started (keeps counting across page reloads). */
+export function elapsedSeconds(user) {
+  const t = Date.parse(user?.sessionStart);
+  return Number.isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 1000)) : 0;
+}
+
+/** 3725 → "01:02:05" */
+export function formatDuration(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
 export function signOut() {
-  try { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
   location.reload();
 }
 
 /** Shows the sign-in screen until a valid ID and name are entered. Resolves with the user. */
 export function requireSignIn() {
   const existing = currentUser();
-  if (existing) return Promise.resolve(existing);
+  if (existing) return Promise.resolve({ ...existing, sessionStart: sessionStart() });
 
   const screen = document.getElementById('signin');
   const form = document.getElementById('signin-form');
@@ -87,8 +112,9 @@ export function requireSignIn() {
       }
       const user = { id: ID_PREFIX + input.digits, first: input.first.trim(), last: input.last.trim(), signedInAt: new Date().toISOString() };
       save(user, remember.checked);
+      try { sessionStorage.setItem(SESSION_KEY, user.signedInAt); } catch { /* ignore */ }
       screen.hidden = true;
-      resolve(user);
+      resolve({ ...user, sessionStart: user.signedInAt });
     });
   });
 }
