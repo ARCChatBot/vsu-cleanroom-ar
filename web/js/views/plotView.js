@@ -71,7 +71,7 @@ export class PlotView extends CanvasPanel {
   /** Called after any manipulation. */
   refresh() {
     this.recompute();
-    this.hoverPt = null;
+    this.pointerLeave();
     this.dirty = this.layersDirty = true;
   }
 
@@ -116,13 +116,6 @@ export class PlotView extends CanvasPanel {
     ctx.fillRect(f.x, f.y, f.w, f.h);
     f.drawAxes(ctx, d.xLabel, this.yLabel);
 
-    if (this.hoverPt) {
-      const [hx, hy] = this.hoverPt.p;
-      ctx.strokeStyle = 'rgba(227,237,252,0.75)'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 6]);
-      ctx.beginPath(); ctx.moveTo(f.px(hx), f.y + f.h); ctx.lineTo(f.px(hx), f.py(hy)); ctx.lineTo(f.x, f.py(hy)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = PALETTE.orange; ctx.beginPath(); ctx.arc(f.px(hx), f.py(hy), 9, 0, Math.PI * 2); ctx.fill();
-    }
 
     // Legend, two per row (hidden series dimmed)
     let ly = f.y + f.h + 84;
@@ -136,16 +129,15 @@ export class PlotView extends CanvasPanel {
       ctx.globalAlpha = 1;
     });
 
-    const readout = this.hoverPt
-      ? `${this.hoverPt.s.name}:  ${d.xLabel} = ${sig(this.hoverPt.p[0])},  ${this.yLabel} = ${sig(this.hoverPt.p[1])}`
-      : 'Point at the chart to read values · tap it to focus';
-    this.text(readout, 22, this.H - 78, { size: 22, color: this.hoverPt ? PALETTE.iceBlue : THEME.muted, weight: this.hoverPt ? 600 : 400 });
+    this.readoutY = this.H - 91;
+    this.text('Point at the chart to read values · tap it to focus', 22, this.H - 78, { size: 22, color: THEME.muted });
     this.text('Source: ' + (d.source || ''), 22, this.H - 42, { size: 17, color: THEME.muted });
   }
 
+  /** Hover uses the 3D cursor + readout strip, so the big panel texture is never redrawn. */
   pointerMove(px, py) {
     const f = this.frame, uv = f.uv(px, py);
-    if (!uv) { if (this.hoverPt) { this.hoverPt = null; return true; } return false; }
+    if (!uv) { this.pointerLeave(); return false; }
     let best = Infinity, hit = null;
     for (const s of this.visibleSeries()) {
       for (const p of this.cache.get(s.name)) {
@@ -154,13 +146,16 @@ export class PlotView extends CanvasPanel {
         if (dist < best) { best = dist; hit = { s, p }; }
       }
     }
-    if (!hit || best > 0.01 || (this.hoverPt && this.hoverPt.p === hit.p)) return false;
+    if (!hit || best > 0.01) { this.pointerLeave(); return false; }
+    if (this.hoverPt && this.hoverPt.p === hit.p) return false;
     this.hoverPt = hit;
+    this.setCursor(f.px(hit.p[0]), f.py(hit.p[1]), { ring: PALETTE.orange });
+    this.setReadout(`${hit.s.name}:  ${this.dataset.xLabel} = ${sig(hit.p[0])},  ${this.yLabel} = ${sig(hit.p[1])}`);
     this.onInspect?.(`${hit.s.name}: (${sig(hit.p[0])}, ${sig(hit.p[1])})`);
-    return true;
+    return false;
   }
 
-  pointerLeave() { this.hoverPt = null; }
+  pointerLeave() { this.hoverPt = null; this.hideCursor(); this.setReadout(null); }
 
   /** Tapping the chart (not a button) asks the host to focus this view. */
   pointerDown(px, py) { return this.frame.uv(px, py) ? { focus: true } : null; }

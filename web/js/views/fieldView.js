@@ -27,7 +27,6 @@ export class FieldView extends CanvasPanel {
     this.showContours = true;
     this.count = f.contourCount || 10;
     this.cmapIdx = defaultColormapIndex(f);
-    this.hover = null;
     this.frame = new PlotFrame(110, TOP, PLOT_W, plotH, f.xMin, f.xMax, f.yMin, f.yMax);
 
     this.addLayer('Heatmap', (ctx) => { if (this.showHeat) this.drawHeat(ctx); });
@@ -103,17 +102,10 @@ export class FieldView extends CanvasPanel {
       ctx.strokeStyle = PALETTE.orange; ctx.lineWidth = 4;
       ctx.beginPath(); ctx.moveTo(bx - 4, yOf(h)); ctx.lineTo(bx + bw + 4, yOf(h)); ctx.stroke();
     }
-    if (this.hover) {
-      ctx.strokeStyle = PALETTE.iceBlue; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(bx - 6, yOf(this.hover.value)); ctx.lineTo(bx + bw + 6, yOf(this.hover.value)); ctx.stroke();
-    }
-
-    // Readout + controls
+    // Idle readout line (the live readout is a small overlay strip drawn on top of it)
     let y = fr.y + fr.h + 84;
-    const readout = this.hover
-      ? `${f.xLabel} = ${sig(this.hover.x, 3)},  ${f.yLabel} = ${sig(this.hover.y, 3)}   →   ${f.quantity} = ${sig(this.hover.value)} ${f.unit}`
-      : 'Point at the field to read values';
-    this.text(readout, 22, y, { size: 22, weight: this.hover ? 600 : 400, color: this.hover ? PALETTE.iceBlue : THEME.muted });
+    this.readoutY = y - 13;
+    this.text('Point at the field to read values · tap it to focus', 22, y, { size: 22, color: THEME.muted });
     y += 44;
     let x = 22;
     x = this.button('Heatmap', x, y, 140, 46, () => { this.showHeat = !this.showHeat; this.layersDirty = true; }, { active: this.showHeat });
@@ -128,17 +120,18 @@ export class FieldView extends CanvasPanel {
     this.text('Source: ' + (f.source || ''), 22, this.H - 36, { size: 17, color: THEME.muted });
   }
 
-  /** Cursor drawn on the base plate (not a layer) so moving it doesn't redraw the data layers. */
+  /** Hover uses the 3D cursor + readout strip, so the big panel texture is never redrawn. */
   pointerMove(px, py) {
-    const uv = this.frame.uv(px, py);
-    if (!uv) { if (this.hover) { this.hover = null; return true; } return false; }
-    const f = this.dataset;
-    this.hover = { u: uv[0], v: uv[1], x: dataX(f, uv[0]), y: dataY(f, uv[1]), value: sampleUV(f, uv[0], uv[1]) };
-    this.onInspect?.(`${f.quantity}=${sig(this.hover.value)} at (${sig(this.hover.x, 3)}, ${sig(this.hover.y, 3)})`);
-    return true;
+    const fr = this.frame, uv = fr.uv(px, py);
+    if (!uv) { this.pointerLeave(); return false; }
+    const f = this.dataset, x = dataX(f, uv[0]), y = dataY(f, uv[1]), value = sampleUV(f, uv[0], uv[1]);
+    this.setCursor(fr.x + uv[0] * fr.w, fr.y + (1 - uv[1]) * fr.h);
+    this.setReadout(`${f.xLabel} = ${sig(x, 3)},  ${f.yLabel} = ${sig(y, 3)}   →   ${f.quantity} = ${sig(value)} ${f.unit}`);
+    this.onInspect?.(`${f.quantity}=${sig(value)} at (${sig(x, 3)}, ${sig(y, 3)})`);
+    return false;
   }
 
-  pointerLeave() { this.hover = null; }
+  pointerLeave() { this.hideCursor(); this.setReadout(null); }
 
   /** Tapping the field (not a button) asks the host to focus this view. */
   pointerDown(px, py) { return this.frame.uv(px, py) ? { focus: true } : null; }

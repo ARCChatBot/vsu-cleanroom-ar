@@ -65,7 +65,7 @@ export class ControlChartView extends CanvasPanel {
     spcCompute(c);
     this.flagged = new Map(c.violations.map((v) => [v.index, v.rule]));
     this.fitY();
-    this.hoverIdx = -1;
+    this.pointerLeave();
     this.dirty = this.layersDirty = true;
   }
 
@@ -96,33 +96,30 @@ export class ControlChartView extends CanvasPanel {
       this.text('baseline', f.x + 8, f.y + 6, { size: 17, color: THEME.eyebrow });
     }
     f.drawAxes(ctx, c.sampleLabel || 'Sample', `${c.quantity} (${c.unit})`, { grid: false });
-    if (this.hoverIdx >= 0) {
-      ctx.strokeStyle = 'rgba(227,237,252,0.7)'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(f.px(this.hoverIdx + 1), f.y); ctx.lineTo(f.px(this.hoverIdx + 1), f.y + f.h); ctx.stroke();
-      ctx.fillStyle = PALETTE.white;
-      ctx.beginPath(); ctx.arc(f.px(this.hoverIdx + 1), f.py(c.values[this.hoverIdx]), 11, 0, Math.PI * 2); ctx.fill();
-    }
 
     const sy = f.y + f.h + 82;
     this.text(`Cpk ${c.cpk.toFixed(2)}    Ppk ${c.ppk.toFixed(2)}    Cp ${c.cp.toFixed(2)}`, 22, sy, { size: 27, weight: 700 });
     ctx.fillStyle = PALETTE.orange; ctx.fillRect(22, sy + 36, 46, 4);
     this.text(`Mean ${c.mean.toFixed(2)} ${c.unit}   σ(within) ${c.sigmaWithin.toFixed(3)}   Target ${c.target}   Spec [${c.lsl}, ${c.usl}]   Violations ${c.violations.length}`, 22, sy + 50, { size: 20, color: THEME.muted });
 
-    const i = this.hoverIdx;
-    const readout = i >= 0
-      ? `${c.sampleLabel || 'Sample'} ${i + 1}:  ${c.values[i].toFixed(2)} ${c.unit}  (${((c.values[i] - c.mean) / c.sigmaWithin).toFixed(1)}σ)${this.flagged.has(i) ? '   ← ' + this.flagged.get(i) : ''}`
-      : 'Point at a sample to inspect it';
-    this.text(readout, 22, this.H - 50, { size: 22, weight: i >= 0 ? 600 : 400, color: i >= 0 ? PALETTE.iceBlue : THEME.muted });
+    this.readoutY = this.H - 63;
+    this.text('Point at a sample to inspect it · tap it to focus', 22, this.H - 50, { size: 22, color: THEME.muted });
   }
 
+  /** Hover uses the 3D cursor + readout strip, so the big panel texture is never redrawn. */
   pointerMove(px, py) {
-    const f = this.frame, uv = f.uv(px, py), n = this.dataset.values.length;
-    const idx = uv ? Math.max(0, Math.min(n - 1, Math.round(f.x0 + uv[0] * (f.x1 - f.x0)) - 1)) : -1;
-    if (idx === this.hoverIdx) return false;
-    this.hoverIdx = idx;
-    if (idx >= 0) this.onInspect?.(`${this.dataset.sampleLabel || 'sample'} ${idx + 1} = ${this.dataset.values[idx].toFixed(2)}`);
-    return true;
+    const c = this.dataset, f = this.frame, uv = f.uv(px, py), n = c.values.length;
+    const i = uv ? Math.max(0, Math.min(n - 1, Math.round(f.x0 + uv[0] * (f.x1 - f.x0)) - 1)) : -1;
+    if (i < 0) { this.pointerLeave(); return false; }
+    if (i === this.hoverIdx) return false;
+    this.hoverIdx = i;
+    const bad = this.flagged.has(i);
+    this.setCursor(f.px(i + 1), f.py(c.values[i]), { ring: bad ? PALETTE.orange : PALETTE.iceBlue });
+    this.setReadout(`${c.sampleLabel || 'Sample'} ${i + 1}:  ${c.values[i].toFixed(2)} ${c.unit}  (${((c.values[i] - c.mean) / c.sigmaWithin).toFixed(1)}σ)${bad ? '   ← ' + this.flagged.get(i) : ''}`,
+      undefined, bad ? PALETTE.orange : PALETTE.iceBlue);
+    this.onInspect?.(`${c.sampleLabel || 'sample'} ${i + 1} = ${c.values[i].toFixed(2)}`);
+    return false;
   }
 
-  pointerLeave() { this.hoverIdx = -1; }
+  pointerLeave() { this.hoverIdx = -1; this.hideCursor(); this.setReadout(null); }
 }

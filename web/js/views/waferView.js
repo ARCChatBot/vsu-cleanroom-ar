@@ -9,7 +9,7 @@
 // =====================================================================================
 
 import * as THREE from 'three';
-import { CanvasPanel, makeLabel, disposeObject, easeInOut } from '../render/panel.js';
+import { CanvasPanel, makeLabel, makeDynamicLabel, disposeObject, easeInOut } from '../render/panel.js';
 import { THEME, PALETTE } from '../render/chart.js';
 import { COLORMAPS } from '../render/colormap.js';
 import { inSpec, waferStats } from '../data/datasets.js';
@@ -116,16 +116,19 @@ export class WaferView {
     for (const k of [prev, i]) if (k >= 0) this.bars.setColorAt(k, this.dieColor(k));
     this.bars.instanceColor.needsUpdate = true;
     const w = this.dataset;
-    if (this.valueLabel) { disposeObject(this.valueLabel); this.content.remove(this.valueLabel); this.valueLabel = null; }
+    if (!this.valueLabel) { this.valueLabel = makeDynamicLabel({ height: 0.02, color: PALETTE.white }); this.content.add(this.valueLabel); }
     if (i >= 0) {
-      const d = w.dies[i], p = this.diePos(d);
-      this.valueLabel = makeLabel(`${d.value.toFixed(2)} ${w.unit}`, { height: 0.02, color: PALETTE.white, bg: 'rgba(0,53,142,0.95)' });
+      const d = w.dies[i], p = this.diePos(d), bad = !inSpec(w, d.value);
+      this.valueLabel.setText(`${d.value.toFixed(2)} ${w.unit}`);
       this.valueLabel.position.set(p.x, p.y + this.barH(d) + 0.025, p.z);
-      this.content.add(this.valueLabel);
-      this.readout = `Die (${d.col}, ${d.row}) at (${d.x.toFixed(0)}, ${d.y.toFixed(0)}) mm  →  ${w.quantity} = ${d.value.toFixed(2)} ${w.unit}${inSpec(w, d.value) ? '' : '   OUT OF SPEC'}`;
+      this.valueLabel.visible = true;
+      this.readout = `Die (${d.col}, ${d.row}) at (${d.x.toFixed(0)}, ${d.y.toFixed(0)}) mm  →  ${w.quantity} = ${d.value.toFixed(2)} ${w.unit}${bad ? '   OUT OF SPEC' : ''}`;
+      this.panel.setReadout(this.readout, undefined, bad ? PALETTE.orange : PALETTE.iceBlue);
       this.onInspect?.(this.readout);
-    } else this.readout = 'Point at a die to read it';
-    this.panel.dirty = true;
+    } else {
+      this.valueLabel.visible = false;
+      this.panel.setReadout(null);
+    }
   }
 
   /** Recompute stats and redraw after the spec limits or the filter changed. */
@@ -171,7 +174,8 @@ class WaferPanel extends CanvasPanel {
     y += 32;
     this.text(`${w.dies.length} dies   Min ${w.min.toFixed(2)}   Max ${w.max.toFixed(2)}   Uniformity ±${w.uniformityPct.toFixed(1)}%   Spec [${w.lsl ?? '–'}, ${w.usl ?? '–'}]`, 22, y, { size: 19, color: THEME.muted });
     y += 32;
-    this.text(v.readout, 22, y, { size: 20, weight: v.hovered >= 0 ? 600 : 400, color: v.hovered >= 0 ? PALETTE.iceBlue : THEME.muted });
+    this.readoutY = y - 10; // live readout strip sits over this idle line
+    this.text('Point at a die to read it · tap it to focus', 22, y, { size: 20, color: THEME.muted });
     y += 38;
     let x = 22;
     x = this.button('Bars −', x, y, 104, 44, () => { v.heightScale = Math.max(0.1, v.heightScale - 0.25); v.layout(); });

@@ -9,7 +9,7 @@
 // =====================================================================================
 
 import * as THREE from 'three';
-import { CanvasPanel, makeLabel, disposeObject, easeInOut } from '../render/panel.js';
+import { CanvasPanel, makeLabel, makeDynamicLabel, disposeObject, easeInOut } from '../render/panel.js';
 import { THEME, PALETTE, niceTicks, fmt, sig } from '../render/chart.js';
 import { COLORMAPS, defaultColormapIndex } from '../render/colormap.js';
 import { contourLevels, computeContours } from '../render/contours.js';
@@ -194,25 +194,20 @@ export class SurfaceView {
     this.dropLine.geometry.setFromPoints([local, new THREE.Vector3(local.x, 0.001, local.z)]);
     this.marker.visible = this.dropLine.visible = true;
     const text = `${sig(val)} ${f.unit}`;
-    const now = performance.now();
-    if (text !== this.valueText && now - (this.labelAt || 0) > 150) { // ≤ ~7 label rebuilds per second
-      this.labelAt = now;
-      if (this.valueLabel) { disposeObject(this.valueLabel); this.content.remove(this.valueLabel); }
-      this.valueLabel = makeLabel(text, { height: 0.02, color: PALETTE.white, bg: 'rgba(0,53,142,0.95)' });
-      this.content.add(this.valueLabel);
-      this.valueText = text;
-    }
-    if (this.valueLabel) { this.valueLabel.position.set(local.x, local.y + 0.03, local.z); this.valueLabel.visible = true; }
+    // One reusable tag (redrawn in place) and the panel's small readout strip: no big texture uploads.
+    if (!this.valueLabel) { this.valueLabel = makeDynamicLabel({ height: 0.02, color: PALETTE.white }); this.content.add(this.valueLabel); }
+    this.valueLabel.setText(text);
+    this.valueLabel.position.set(local.x, local.y + 0.03, local.z);
+    this.valueLabel.visible = true;
     this.readout = `${f.xLabel} = ${sig(dataX(f, u), 3)},  ${f.yLabel} = ${sig(dataY(f, v), 3)}  →  ${f.quantity} = ${text}`;
-    this.panel.dirty = true;
+    this.panel.setReadout(this.readout);
     this.onInspect?.(this.readout);
   }
 
   clearHover() {
     this.marker.visible = this.dropLine.visible = false;
     if (this.valueLabel) this.valueLabel.visible = false;
-    this.readout = 'Point at the surface to read values';
-    this.panel.dirty = true;
+    this.panel.setReadout(null);
   }
 
   update(dt = 1 / 60) {
@@ -242,7 +237,8 @@ class SurfacePanel extends CanvasPanel {
 
   draw() {
     const v = this.view;
-    this.text(v.readout, 22, 78, { size: 20, weight: 600, color: v.marker.visible ? PALETTE.iceBlue : THEME.muted });
+    this.readoutY = 70; // live readout strip sits over this idle line
+    this.text('Point at the surface to read values · tap it to focus', 22, 78, { size: 20, color: THEME.muted });
     let y = 118, x = 22;
     x = this.button('Height −', x, y, 124, 44, () => { v.heightScale = Math.max(0.25, v.heightScale - 0.25); v.applyHeight(); });
     this.text(`${v.heightScale.toFixed(2)}×`, x, y + 22, { size: 20, baseline: 'middle', color: THEME.caption });

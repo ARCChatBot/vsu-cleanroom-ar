@@ -105,6 +105,7 @@ export class CanvasPanel {
   }
 
   update(dt = 1 / 60) {
+    if (this.pendingReadout && performance.now() - this.readout.userData.at >= 120) this.drawReadout(this.pendingReadout.text, this.pendingReadout.color);
     if (this.explodeT !== this.explodeTarget) {
       const step = dt / 0.7; // 0.7 s animation
       this.explodeT = this.explodeTarget > this.explodeT ? Math.min(1, this.explodeT + step) : Math.max(0, this.explodeT - step);
@@ -161,6 +162,79 @@ export class CanvasPanel {
   }
 
   close() { this.onClose?.(); }
+
+  // ---------------------------------------------------------------------------------
+  //  Cheap hover feedback: a 3D cursor and a small readout strip. Neither redraws the
+  //  big panel texture, which matters on headset GPUs (re-uploading ~1.5 MP per hover
+  //  frame makes HoloLens stutter).
+  // ---------------------------------------------------------------------------------
+
+  /** Local plane coordinates (metres) of a canvas pixel. */
+  pxToLocal(px, py, z = 0) {
+    const { width, height } = this.mesh.geometry.parameters;
+    return new THREE.Vector3((px / this.W - 0.5) * width, (0.5 - py / this.H) * height, z);
+  }
+
+  hoverZ() { return 0.003 * (this.layers.length + 1) + 0.002; } // above the stacked data layers
+
+  /** Shows the hover cursor at a canvas pixel: crosshair (ice blue) + ring (ice or orange). */
+  setCursor(px, py, { ring = PALETTE.iceBlue } = {}) {
+    if (!this.cursor) {
+      this.cursor = new THREE.Group();
+      const mat = new THREE.MeshBasicMaterial({ color: PALETTE.iceBlue, transparent: true, opacity: 0.9, depthWrite: false });
+      const h = new THREE.Mesh(new THREE.PlaneGeometry(0.028, 0.0012), mat);
+      const v = new THREE.Mesh(new THREE.PlaneGeometry(0.0012, 0.028), mat);
+      this.cursorRing = new THREE.Mesh(new THREE.RingGeometry(0.004, 0.0065, 24), new THREE.MeshBasicMaterial({ color: ring, depthWrite: false }));
+      for (const m of [h, v, this.cursorRing]) m.renderOrder = 30;
+      this.cursor.add(h, v, this.cursorRing);
+      this.root.add(this.cursor);
+    }
+    this.cursorRing.material.color.set(ring);
+    this.cursor.position.copy(this.pxToLocal(px, py, this.hoverZ()));
+    this.cursor.visible = true;
+  }
+
+  hideCursor() { if (this.cursor) this.cursor.visible = false; }
+
+  /**
+   * Shows `text` in a thin strip at canvas row `y` (px), over the panel's idle readout line.
+   * Throttled to ~8 updates/s; pass null to hide it and reveal the idle line underneath.
+   */
+  setReadout(text, y = this.readoutY ?? this.H - 86, color = PALETTE.iceBlue) {
+    if (text == null) { if (this.readout) this.readout.visible = false; this.pendingReadout = null; return; }
+    const STRIP_H = 48;
+    if (!this.readout) {
+      const c = document.createElement('canvas');
+      c.width = this.W; c.height = STRIP_H;
+      const tex = makeTexture(c);
+      const { width } = this.mesh.geometry.parameters;
+      this.readout = new THREE.Mesh(new THREE.PlaneGeometry(width - 0.01, STRIP_H / PX_PER_M), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
+      this.readout.renderOrder = 29;
+      this.readout.userData = { canvas: c, ctx: c.getContext('2d'), tex, text: '', at: 0 };
+      this.root.add(this.readout);
+    }
+    this.readout.position.copy(this.pxToLocal(this.W / 2, y + STRIP_H / 2, this.hoverZ()));
+    this.readout.visible = true;
+    const u = this.readout.userData;
+    if (text === u.text) return;
+    const now = performance.now();
+    if (now - u.at < 120) { this.pendingReadout = { text, color }; return; } // flushed by update()
+    this.drawReadout(text, color);
+  }
+
+  drawReadout(text, color) {
+    const u = this.readout.userData, { ctx, canvas } = u;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgb(11,15,25)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = color;
+    ctx.font = `600 22px ${THEME.font}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(ellipsize(ctx, text, canvas.width - 44), 22, canvas.height / 2 + 1);
+    u.tex.needsUpdate = true;
+    u.text = text; u.at = performance.now();
+    this.pendingReadout = null;
+  }
 
   /** Change the panel height (e.g. when the dashboard gains datasets). Keeps the top edge in place. */
   resize(height) {
@@ -250,9 +324,9 @@ export class CanvasPanel {
 
   onLeave() {
     this.hoverPx = null;
+    if (this.hoverBtn) this.dirty = true; // only a highlighted button needs the big texture redrawn
     this.hoverBtn = null;
     this.pointerLeave?.();
-    this.dirty = true;
   }
 
   onDown(hit) {
@@ -316,6 +390,34 @@ export function makeLabel(text, { height = 0.022, color = THEME.ink, weight = 60
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: makeTexture(c), transparent: true, depthWrite: false }));
   sprite.scale.set((height * w) / h, height, 1);
   sprite.renderOrder = 10;
+  return sprite;
+}
+
+/**
+ * A text label whose text can change cheaply: one fixed-size canvas, redrawn in place
+ * (no new textures per update). Use for hover value tags.
+ */
+export function makeDynamicLabel({ height = 0.02, color = THEME.ink, bg = 'rgba(0,53,142,0.95)', maxChars = 22 } = {}) {
+  const fontPx = 56, pad = 16, w = Math.ceil(fontPx * 0.62 * maxChars) + pad * 2, h = fontPx + pad * 2;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const tex = makeTexture(c);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sprite.scale.set((height * w) / h, height, 1);
+  sprite.renderOrder = 10;
+  let current = null;
+  sprite.setText = (text) => {
+    if (text === current) return;
+    current = text;
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = `600 ${fontPx}px ${THEME.font}`;
+    const tw = Math.min(w, ctx.measureText(text).width + pad * 2);
+    ctx.fillStyle = bg; roundRect(ctx, (w - tw) / 2, 0, tw, h, 14); ctx.fill();
+    ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, w / 2, h / 2 + 2);
+    tex.needsUpdate = true;
+  };
   return sprite;
 }
 
