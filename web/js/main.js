@@ -38,6 +38,12 @@ await Promise.race([
 
 // Students sign in (VSU ID + name) before the app starts. Kept on this device only.
 const user = await requireSignIn();
+// Share the sign-in with the other C2C sites and log it to the C2C training record (Airtable).
+if (window.C2C) {
+  const known = window.C2C.student();
+  window.C2C.rememberStudent(user.id, user.first, user.last);
+  if (!known || known.v !== user.id || user.sessionStart === user.signedInAt) window.C2C.recordSignIn('AR Data Visualization');
+}
 document.getElementById('user-name').textContent = `${user.first} ${user.last} · ${user.id}`;
 document.getElementById('user-chip').hidden = false;
 document.getElementById('signout-btn').addEventListener('click', () => {
@@ -686,6 +692,21 @@ async function loadBundledCsvs() {
       catch (e) { console.warn(`[DataViz] ${name}: ${e.message}`); }
     }
   } catch { /* no bundled data */ }
+  await loadC2CReports();
+}
+
+// Live training summaries from the C2C server (completions per day, recent scores). No names or IDs.
+async function loadC2CReports() {
+  const c2c = window.C2C;
+  if (!c2c?.connected) return;
+  try {
+    const res = await fetch(c2c.apiUrl('api/reports/index.json'));
+    if (!res.ok) return;
+    for (const name of await res.json()) {
+      try { addDataset(parseCsv(await (await fetch(c2c.apiUrl('api/reports/' + name))).text(), name)); }
+      catch (e) { console.warn(`[DataViz] C2C ${name}: ${e.message}`); }
+    }
+  } catch { /* training server asleep or offline: the lab datasets still load */ }
 }
 
 async function importFiles(files) {

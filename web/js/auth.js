@@ -84,6 +84,9 @@ export function requireSignIn() {
   const idInput = document.getElementById('signin-id');
   const first = document.getElementById('signin-first');
   const last = document.getElementById('signin-last');
+  // Pre-fill the student already signed in on another C2C site (shared c2c-connect.js).
+  const shared = window.C2C?.student();
+  if (shared && !first.value && !last.value) { idInput.value = idDigits(shared.v); first.value = shared.first; last.value = shared.last; }
   const remember = document.getElementById('signin-remember');
   const err = (name, msg) => {
     const el = document.getElementById(`signin-${name}-err`);
