@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { CanvasPanel, makeLabel, disposeObject, easeInOut } from '../render/panel.js';
 import { THEME, PALETTE } from '../render/chart.js';
 import { COLORMAPS } from '../render/colormap.js';
-import { inSpec } from '../data/datasets.js';
+import { inSpec, waferStats } from '../data/datasets.js';
 
 const DISPLAY_D = 0.42, BAR_MAX = 0.10, BAR_MIN = 0.003;
 const SPREAD = 0.45, LIFT_BAD = 0.09; // exploded radial spread factor and out-of-spec lift (m)
@@ -46,7 +46,7 @@ export class WaferView {
     const n = w.dies.length;
     this.bars = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.5 }), n);
     this.caps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: PALETTE.orange }), n);
-    this.bars.userData.target = { onHover: (hit) => this.setHover(hit.instanceId), onLeave: () => this.setHover(-1), onDown: () => ({ consumed: true }) };
+    this.bars.userData.target = { onHover: (hit) => this.setHover(hit.instanceId), onLeave: () => this.setHover(-1), onDown: () => ({ focus: true }) };
     this.content.add(this.bars, this.caps);
 
     this.badLabel = makeLabel(`Out-of-spec dies (${this.badCount})`, { height: 0.018, color: PALETTE.orange });
@@ -83,7 +83,8 @@ export class WaferView {
     const q = new THREE.Quaternion(), hidden = new THREE.Vector3(0, 0, 0);
     w.dies.forEach((d, i) => {
       const h = this.barH(d), p = this.diePos(d);
-      m.compose(new THREE.Vector3(p.x, p.y + h / 2, p.z), q, new THREE.Vector3(w.dieW * s * 0.88, h, w.dieH * s * 0.88));
+      const shown = !this.onlyBad || !inSpec(w, d.value); // focus filter: show only out-of-spec dies
+      m.compose(new THREE.Vector3(p.x, p.y + h / 2, p.z), q, shown ? new THREE.Vector3(w.dieW * s * 0.88, h, w.dieH * s * 0.88) : hidden);
       this.bars.setMatrixAt(i, m);
       if (i === this.hovered) c.set(PALETTE.white);
       else c.setRGB(...this.cmap.rgb((d.value - w.min) / (w.max - w.min)));
@@ -124,6 +125,18 @@ export class WaferView {
       this.readout = `Die (${d.col}, ${d.row}) at (${d.x.toFixed(0)}, ${d.y.toFixed(0)}) mm  →  ${w.quantity} = ${d.value.toFixed(2)} ${w.unit}${inSpec(w, d.value) ? '' : '   OUT OF SPEC'}`;
       this.onInspect?.(this.readout);
     } else this.readout = 'Point at a die to read it';
+    this.panel.dirty = true;
+  }
+
+  /** Recompute stats and redraw after the spec limits or the filter changed. */
+  refresh() {
+    const w = this.dataset;
+    waferStats(w);
+    this.badCount = w.dies.filter((d) => !inSpec(w, d.value)).length;
+    disposeObject(this.badLabel); this.content.remove(this.badLabel);
+    this.badLabel = makeLabel(`Out-of-spec dies (${this.badCount})`, { height: 0.018, color: PALETTE.orange });
+    this.content.add(this.badLabel);
+    this.layout();
     this.panel.dirty = true;
   }
 

@@ -50,7 +50,7 @@ const ALIASES = [
   [/thermal|temperature|heat ?map of the die|hot ?spot|junction/, 'thermal'],
   [/electric field|e[- ]?field|\|e\||field strength/, 'tcad-e'],
   [/potential|voltage map|tcad/, 'tcad-phi'],
-  [/process window|focus|dose|bossung|\bcd map/, 'process-window'],
+  [/process window|focus[- ]exposure|\bfem\b|dose|bossung|\bcd map/, 'process-window'], // not bare "focus": that's the focus-mode command
   [/control chart|spc|gate cd|critical dimension|cpk|violation/, 'spc-cd'],
   [/c[- ]?v\b|capacitance|mos cap/, 'csv-mos_cv'],
   [/i[- ]?v\b|output curve|transistor|mosfet curve|drain current/, 'iv-nmos'],
@@ -76,6 +76,10 @@ export function parseCommand(text, app) {
   const all = /\b(all|everything|every view|views)\b/.test(t) && !d;
   const isQuestion = /^(what|why|how|where|which|when|is|are|does|do|can|could|should|explain|analy[sz]e|summari[sz]e|tell|compare|describe)\b/.test(t);
 
+  const spec = t.match(/\b(lsl|usl|lower spec(?: limit)?|upper spec(?: limit)?)\b[^0-9-]*(-?\d+(?:\.\d+)?)/);
+  if (spec) return [{ type: 'setSpec', which: /usl|upper/.test(spec[1]) ? 'usl' : 'lsl', value: Number(spec[2]), datasetId: d?.id }];
+  if (/\b(exit focus|unfocus|stop focus|done|back to all|show all views)\b/.test(t)) return [{ type: 'unfocus' }];
+  if (/\b(focus|zoom in on|bring .* (front|forward|center|centre))\b/.test(t) && !isQuestion) return [{ type: 'focus', datasetId: d?.id }];
   if (/\b(explode|expand|separate|pull apart|break apart)\b/.test(t) && !isQuestion) return [{ type: 'explode', target: all || !d ? 'all' : d.id, exploded: true }];
   if (/\b(collapse|unexplode|put (it )?back|reassemble)\b/.test(t)) return [{ type: 'explode', target: all || !d ? 'all' : d.id, exploded: false }];
   if (/\b(arrange|organi[sz]e|bring .* (to|around) me|gather)\b/.test(t)) return [{ type: 'arrange' }];
@@ -108,6 +112,11 @@ const TOOLS = (datasets) => {
     { name: 'set_colormap', description: 'Change the colormap of a field or wafer view.', strict: true,
       input_schema: obj({ dataset_id: { type: 'string', enum: ids }, colormap: { type: 'string', enum: COLORMAPS.map((c) => c.name) } }, ['dataset_id', 'colormap']) },
     { name: 'arrange_views', description: 'Gather all open views on an arc around the user.', strict: true, input_schema: obj({}, []) },
+    { name: 'focus_view', description: 'Bring one dataset front and centre in focus mode, with a toolbar for manipulating its data. Opens it first if needed.', strict: true,
+      input_schema: obj({ dataset_id: { type: 'string', enum: ids } }, ['dataset_id']) },
+    { name: 'exit_focus', description: 'Leave focus mode and show all views again.', strict: true, input_schema: obj({}, []) },
+    { name: 'set_spec_limit', description: 'Change the lower (lsl) or upper (usl) spec limit of the wafer map or the control chart; statistics, in-spec percentage, Cpk/Ppk and violations recompute. Non-destructive (the toolbar has Reset).', strict: true,
+      input_schema: obj({ dataset_id: { type: 'string', enum: datasets.filter((d) => d.kind === 'wafer' || d.kind === 'spc').map((d) => d.id) }, limit: { type: 'string', enum: ['lsl', 'usl'] }, value: { type: 'number' } }, ['dataset_id', 'limit', 'value']) },
   ];
 };
 
@@ -116,7 +125,7 @@ const SYSTEM = `You are the MI-CHIPS lab data analyst inside a web/AR visualizat
 How to answer:
 - Answer in 2–4 short spoken sentences of plain text: no markdown, lists, symbols or tables. Lead with the finding, quote the key numbers with units, and end with one practical implication or next check when useful.
 - Base every number on the dataset summaries below; if something is not in the data, say so instead of guessing. The built-in datasets are teaching-grade synthetic data, so do not present them as real tool results.
-- If the user asks you to show, open, close, explode, collapse, recolor or arrange visualizations, call the matching tool, then briefly say what you did. When a question is about a dataset that is not open, you may open it so they can see what you describe.
+- If the user asks you to show, open, close, focus, explode, collapse, recolor or arrange visualizations, or to change a spec limit, call the matching tool, then briefly say what you did. Summaries reflect any limits the user has adjusted. When a question is about a dataset that is not open, you may open it so they can see what you describe.
 - "This", "it" or "that" refers to the focused dataset named in the latest system note.
 
 Dataset summaries:
@@ -214,6 +223,9 @@ export class Analyst {
       case 'explode_view': return a.execute({ type: 'explode', target: input.target, exploded: input.exploded });
       case 'set_colormap': return a.execute({ type: 'colormap', datasetId: input.dataset_id, colormap: input.colormap });
       case 'arrange_views': return a.execute({ type: 'arrange' });
+      case 'focus_view': return a.execute({ type: 'focus', datasetId: input.dataset_id });
+      case 'exit_focus': return a.execute({ type: 'unfocus' });
+      case 'set_spec_limit': return a.execute({ type: 'setSpec', datasetId: input.dataset_id, which: input.limit, value: input.value });
       default: throw new Error('unknown tool ' + name);
     }
   }

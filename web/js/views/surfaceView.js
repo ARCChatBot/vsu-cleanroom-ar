@@ -13,7 +13,7 @@ import { CanvasPanel, makeLabel, disposeObject, easeInOut } from '../render/pane
 import { THEME, PALETTE, niceTicks, fmt, sig } from '../render/chart.js';
 import { COLORMAPS, defaultColormapIndex } from '../render/colormap.js';
 import { contourLevels, computeContours } from '../render/contours.js';
-import { fieldAt, normalize, sampleUV, dataX, dataY } from '../data/datasets.js';
+import { fieldAt, normalize, colorNorm, sampleUV, dataX, dataY } from '../data/datasets.js';
 
 const HMAX = 0.16;
 const LIFT_SURFACE = 0.11, LIFT_LINES = 0.20; // exploded heights (m)
@@ -65,7 +65,7 @@ export class SurfaceView {
     geo.setIndex(idx);
     geo.computeVertexNormals();
     this.surface = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.55 }));
-    this.surface.userData.target = { onHover: (hit) => this.hoverAt(hit), onLeave: () => this.clearHover(), onDown: () => ({ consumed: true }) };
+    this.surface.userData.target = { onHover: (hit) => this.hoverAt(hit), onLeave: () => this.clearHover(), onDown: () => ({ focus: true }) };
     this.surfaceGroup = new THREE.Group();
     this.surfaceGroup.add(this.surface);
     this.content.add(this.surfaceGroup);
@@ -107,11 +107,11 @@ export class SurfaceView {
 
   applyColormap() {
     const f = this.dataset, col = this.surface.geometry.attributes.color;
-    for (let i = 0; i < f.nx * f.ny; i++) col.setXYZ(i, ...this.cmap.rgb(normalize(f, f.values[i])));
+    for (let i = 0; i < f.nx * f.ny; i++) col.setXYZ(i, ...this.cmap.rgb(colorNorm(f, f.values[i])));
     col.needsUpdate = true;
     const c = document.createElement('canvas'); c.width = 8; c.height = 256;
     const ctx = c.getContext('2d');
-    for (let y = 0; y < 256; y++) { ctx.fillStyle = this.cmap.css(1 - y / 255); ctx.fillRect(0, y, 8, 1); }
+    for (let y = 0; y < 256; y++) { ctx.fillStyle = this.cmap.css(colorNorm(f, f.max - (y / 255) * (f.max - f.min))); ctx.fillRect(0, y, 8, 1); }
     this.bar.material.map?.dispose();
     this.bar.material.map = new THREE.CanvasTexture(c);
     this.bar.material.map.colorSpace = THREE.SRGBColorSpace;
@@ -223,6 +223,9 @@ export class SurfaceView {
     }
     this.panel.update(dt);
   }
+
+  /** Re-render after the dataset was manipulated (colour window, threshold). */
+  refresh() { this.applyColormap(); this.panel.dirty = true; }
 
   dispose() { disposeObject(this.root); }
 }

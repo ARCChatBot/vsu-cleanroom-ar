@@ -7,6 +7,7 @@
 
 import { CanvasPanel } from '../render/panel.js';
 import { PlotFrame, THEME, PALETTE } from '../render/chart.js';
+import { spcCompute } from '../data/datasets.js';
 
 const TOP = 64 + 150;
 
@@ -18,8 +19,8 @@ export class ControlChartView extends CanvasPanel {
     this.interactables = [this.mesh];
     this.hoverIdx = -1;
     this.flagged = new Map(c.violations.map((v) => [v.index, v.rule]));
-    const lo = Math.min(c.lcl, c.lsl, ...c.values), hi = Math.max(c.ucl, c.usl, ...c.values), pad = (hi - lo) * 0.08;
-    this.frame = new PlotFrame(100, TOP, this.W - 250, 400, 0.5, c.values.length + 0.5, lo - pad, hi + pad);
+    this.frame = new PlotFrame(100, TOP, this.W - 250, 400, 0.5, c.values.length + 0.5, 0, 1);
+    this.fitY();
 
     this.addLayer('Control limits', (ctx) => {
       for (const k of [1, 2]) {
@@ -51,6 +52,25 @@ export class ControlChartView extends CanvasPanel {
       }
     });
   }
+
+  fitY() {
+    const c = this.dataset;
+    const lo = Math.min(c.lcl, c.lsl, ...c.values), hi = Math.max(c.ucl, c.usl, ...c.values), pad = (hi - lo) * 0.08;
+    this.frame.setRange(0.5, c.values.length + 0.5, lo - pad, hi + pad);
+  }
+
+  /** Recompute limits, capability and rule violations after the spec limits or baseline changed. */
+  refresh() {
+    const c = this.dataset;
+    spcCompute(c);
+    this.flagged = new Map(c.violations.map((v) => [v.index, v.rule]));
+    this.fitY();
+    this.hoverIdx = -1;
+    this.dirty = this.layersDirty = true;
+  }
+
+  /** Tapping the chart (not a button) asks the host to focus this view. */
+  pointerDown(px, py) { return this.frame.uv(px, py) ? { focus: true } : null; }
 
   hline(ctx, v, color, width, label, dash) {
     const f = this.frame;

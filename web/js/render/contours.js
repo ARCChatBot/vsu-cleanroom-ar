@@ -12,6 +12,7 @@ export function contourLevels(f, count) {
   const levels = [];
   for (let k = 1; k <= count; k++) levels.push({ level: f.min + (k * (f.max - f.min)) / (count + 1), highlight: false });
   for (const h of f.highlightLevels || []) if (h > f.min && h < f.max) levels.push({ level: h, highlight: true });
+  if (f.userThreshold != null && f.userThreshold > f.min && f.userThreshold < f.max) levels.push({ level: f.userThreshold, highlight: true }); // focus-mode threshold
   return levels;
 }
 

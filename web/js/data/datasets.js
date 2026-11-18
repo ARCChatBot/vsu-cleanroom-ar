@@ -44,6 +44,34 @@ export function recomputeRange(f) {
 }
 
 export const normalize = (f, v) => (v - f.min) / (f.max - f.min);
+
+/**
+ * Colour mapping with an optional user colour window [colorLo, colorHi] (focus mode). Values
+ * outside the window clamp to the ends of the colormap, which raises contrast where it matters.
+ * Heights and contours still use the full data range.
+ */
+export function colorNorm(f, v) {
+  const lo = f.colorLo ?? f.min, hi = f.colorHi ?? f.max;
+  return Math.min(1, Math.max(0, (v - lo) / (hi - lo || 1)));
+}
+
+/** Fraction of the field above a level (0–1). */
+export function fractionAbove(f, level) {
+  let n = 0;
+  for (const v of f.values) if (v > level) n++;
+  return n / f.values.length;
+}
+
+/** Remembers a dataset's original adjustable fields the first time it is manipulated (for Reset). */
+export function snapshot(d, keys) {
+  d._orig ||= {};
+  for (const k of keys) if (!(k in d._orig)) d._orig[k] = d[k];
+}
+export function restore(d) {
+  if (!d._orig) return;
+  Object.assign(d, d._orig);
+  delete d._orig;
+}
 export const dataX = (f, u) => f.xMin + u * (f.xMax - f.xMin);
 export const dataY = (f, v) => f.yMin + v * (f.yMax - f.yMin);
 

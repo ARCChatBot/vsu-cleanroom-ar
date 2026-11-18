@@ -10,7 +10,7 @@ import { CanvasPanel } from '../render/panel.js';
 import { PlotFrame, THEME, PALETTE, niceTicks, fmt, sig } from '../render/chart.js';
 import { COLORMAPS, defaultColormapIndex } from '../render/colormap.js';
 import { contourLevels, computeContours } from '../render/contours.js';
-import { fieldAt, normalize, sampleUV, dataX, dataY } from '../data/datasets.js';
+import { fieldAt, normalize, colorNorm, sampleUV, dataX, dataY } from '../data/datasets.js';
 
 const PLOT_W = 600, TOP = 64 + 168;
 
@@ -45,7 +45,7 @@ export class FieldView extends CanvasPanel {
     const ictx = img.getContext('2d'), data = ictx.createImageData(f.nx, f.ny);
     for (let y = 0; y < f.ny; y++) {
       for (let x = 0; x < f.nx; x++) {
-        const [r, g, b] = this.cmap.rgb(normalize(f, fieldAt(f, x, y)));
+        const [r, g, b] = this.cmap.rgb(colorNorm(f, fieldAt(f, x, y)));
         const o = ((f.ny - 1 - y) * f.nx + x) * 4; // image row 0 = top = yMax
         data.data[o] = r * 255; data.data[o + 1] = g * 255; data.data[o + 2] = b * 255; data.data[o + 3] = 255;
       }
@@ -66,7 +66,7 @@ export class FieldView extends CanvasPanel {
     const fr = this.frame, f = this.dataset;
     for (const s of this.segments) {
       if (s.highlight !== highlight) continue;
-      ctx.strokeStyle = highlight ? PALETTE.orange : this.showHeat ? 'rgba(227,237,252,0.85)' : this.cmap.css(normalize(f, s.level));
+      ctx.strokeStyle = highlight ? PALETTE.orange : this.showHeat ? 'rgba(227,237,252,0.85)' : this.cmap.css(colorNorm(f, s.level));
       ctx.lineWidth = highlight ? 5 : 2;
       ctx.beginPath();
       ctx.moveTo(fr.x + s.a[0] * fr.w, fr.y + (1 - s.a[1]) * fr.h);
@@ -89,7 +89,7 @@ export class FieldView extends CanvasPanel {
     // Colourbar
     const bx = fr.x + fr.w + 26, bw = 26;
     const grad = ctx.createLinearGradient(0, fr.y + fr.h, 0, fr.y);
-    for (let i = 0; i <= 16; i++) grad.addColorStop(i / 16, this.cmap.css(i / 16));
+    for (let i = 0; i <= 16; i++) { const v = f.min + (i / 16) * (f.max - f.min); grad.addColorStop(i / 16, this.cmap.css(colorNorm(f, v))); }
     ctx.fillStyle = grad; ctx.fillRect(bx, fr.y, bw, fr.h);
     const yOf = (v) => fr.y + fr.h - normalize(f, v) * fr.h;
     const t = niceTicks(f.min, f.max, 6);
@@ -139,4 +139,10 @@ export class FieldView extends CanvasPanel {
   }
 
   pointerLeave() { this.hover = null; }
+
+  /** Tapping the field (not a button) asks the host to focus this view. */
+  pointerDown(px, py) { return this.frame.uv(px, py) ? { focus: true } : null; }
+
+  /** Re-render after the dataset was manipulated (colour window, threshold). */
+  refresh() { this.rebuild(); }
 }

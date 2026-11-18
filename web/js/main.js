@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { allSamples } from './data/samples.js';
 import { parseCsv } from './data/csv.js';
-import { VIEW_KINDS } from './data/datasets.js';
+import { VIEW_KINDS, snapshot } from './data/datasets.js';
 import { PALETTE } from './render/chart.js';
 import { COLORMAPS } from './render/colormap.js';
 import { PlotView } from './views/plotView.js';
@@ -23,7 +23,8 @@ import { ControlChartView } from './views/controlChartView.js';
 import { SurfaceView } from './views/surfaceView.js';
 import { WaferView } from './views/waferView.js';
 import { Dashboard } from './views/dashboard.js';
-import { CanvasPanel } from './render/panel.js';
+import { CanvasPanel, easeInOut } from './render/panel.js';
+import { FocusPanel } from './views/focusPanel.js';
 import { AiPanel } from './views/aiPanel.js';
 import { Analyst, loadSettings, saveSettings, aiConfigured } from './ai/analyst.js';
 import { Voice, speak, stopSpeaking, voiceSupported } from './ai/voice.js';
@@ -86,6 +87,16 @@ const app = {
   toggleListening: () => { voice.toggle(); app.aiPanel.dirty = true; },
   toggleHandsFree: () => { voice.handsFree ? voice.stop() : voice.start(true); app.aiPanel.dirty = true; },
   stopSpeaking: () => stopSpeaking(),
+  exitFocus: () => exitFocus(),
+  focusedView: () => focus?.view || null,
+
+  /** Refresh every view of a dataset after it was manipulated, and restart the AI context. */
+  dataChanged(d) {
+    for (const v of app.views) if (v.dataset === d) v.refresh?.();
+    analyst.reset();
+    if (focus) focus.panel.dirty = true;
+    app.dashboard.dirty = true;
+  },
 
   /** Executes an action object and returns a short sentence describing what happened. */
   execute(a) {
@@ -119,6 +130,26 @@ const app = {
         return `${a.exploded ? 'Exploded' : 'Collapsed'} ${what}.`;
       }
       case 'arrange': arrange(); return 'Arranged the views around you.';
+      case 'focus': {
+        const d = byId(a.datasetId) || app.focused()?.dataset;
+        if (!d) return 'Which chart should I focus on?';
+        let v = viewsOf(d.id)[0];
+        if (!v) { open(d, VIEW_KINDS[d.kind][0]); v = viewsOf(d.id)[0]; }
+        enterFocus(v);
+        return `Focused on ${d.title}. Use the toolbar under it to adjust the data, or say "done".`;
+      }
+      case 'unfocus': exitFocus(); return 'Back to all views.';
+      case 'setSpec': {
+        const d = byId(a.datasetId) || [focus?.view, app.focused()].map((v) => v?.dataset).find((x) => x && (x.kind === 'wafer' || x.kind === 'spc'));
+        if (!d || !(d.kind === 'wafer' || d.kind === 'spc')) return 'Spec limits apply to the wafer map and the control chart. Focus one of them first.';
+        snapshot(d, ['lsl', 'usl', 'baseline']);
+        const other = a.which === 'lsl' ? d.usl : d.lsl;
+        if (other != null && (a.which === 'lsl' ? a.value >= other : a.value <= other)) return `That would put the ${a.which.toUpperCase()} past the other limit (${other}).`;
+        d[a.which] = a.value;
+        app.dataChanged(d);
+        const stat = d.kind === 'wafer' ? `${d.inSpecPct.toFixed(1)}% of dies are now in spec` : `Cpk is now ${d.cpk.toFixed(2)} and Ppk ${d.ppk.toFixed(2)}`;
+        return `Set the ${a.which.toUpperCase()} of ${d.title} to ${a.value} ${d.unit}. ${stat}.`;
+      }
       case 'scale': {
         const v = app.focused();
         if (!v) return 'Open a view first.';
@@ -165,8 +196,10 @@ const getPointer = (id) => {
 };
 
 function interactiveMeshes() {
-  const list = [...app.dashboard.interactables, ...app.aiPanel.interactables];
-  for (const v of app.views) list.push(...v.interactables);
+  const list = [...app.aiPanel.interactables];
+  if (app.dashboard.root.visible) list.push(...app.dashboard.interactables);
+  if (focus) list.push(...focus.panel.interactables);
+  for (const v of app.views) if (v.root.visible) list.push(...v.interactables); // raycasts ignore visibility, so filter here
   return list;
 }
 
@@ -294,6 +327,7 @@ function processPointer(p) {
     const r = target.onDown?.(hit);
     if (hit.object.userData.view) setFocus(hit.object.userData.view);
     if (r?.dragRoot) p.drag = { root: r.dragRoot, face: r.face, dist: hit.distance, offset: r.dragRoot.position.clone().sub(hit.point) };
+    if (r?.focus && hit.object.userData.view) enterFocus(hit.object.userData.view);
   }
   p.pressed = p.released = false;
   return hit;
@@ -340,7 +374,11 @@ function updatePokes() {
     const hit = { object: best.m, uv: best.uv, point: best.point, distance: 0 };
     target.onHover?.(hit);
     // Press when the fingertip pushes through the surface; re-arm once it backs off (hysteresis).
-    if (!p.touching && best.z < 0.004) { p.touching = true; target.onDown?.(hit); if (best.m.userData.view) setFocus(best.m.userData.view); }
+    if (!p.touching && best.z < 0.004) {
+      p.touching = true;
+      const r = target.onDown?.(hit);
+      if (best.m.userData.view) { setFocus(best.m.userData.view); if (r?.focus) enterFocus(best.m.userData.view); }
+    }
     else if (p.touching && best.z > 0.015) p.touching = false;
   });
 }
@@ -443,6 +481,8 @@ function open(d, kind) {
 
 function close(v) {
   if (!v) return;
+  if (focus?.view === v) exitFocus();
+  tweens.delete(v.root);
   for (const p of pointers.values()) {
     if (p.drag?.root === v.root) p.drag = null;
     if (p.hover && v.interactables.some((m) => m.userData.target === p.hover)) p.hover = null;
@@ -454,7 +494,86 @@ function close(v) {
   app.dashboard.dirty = true;
 }
 
+// ---------------------------------------------------------------------------------
+//  Focus mode: tap a chart to bring it front and centre with a data toolbar
+// ---------------------------------------------------------------------------------
+
+let focus = null; // { view, panel, saved: Map(root → {p, q, s}) }
+const tweens = new Map();
+
+function tweenTo(root, pos, quat, scale, dur = 0.55) {
+  tweens.set(root, { p0: root.position.clone(), q0: root.quaternion.clone(), s0: root.scale.x, p1: pos.clone(), q1: quat.clone(), s1: scale, t: 0, dur });
+}
+
+function updateTweens(dt) {
+  for (const [root, tw] of tweens) {
+    tw.t = Math.min(1, tw.t + dt / tw.dur);
+    const e = easeInOut(tw.t);
+    root.position.lerpVectors(tw.p0, tw.p1, e);
+    root.quaternion.slerpQuaternions(tw.q0, tw.q1, e);
+    root.scale.setScalar(tw.s0 + (tw.s1 - tw.s0) * e);
+    if (tw.t >= 1) tweens.delete(root);
+  }
+}
+
+function enterFocus(v) {
+  if (focus?.view === v) return;
+  if (focus) exitFocus();
+  const inXR = renderer.xr.isPresenting;
+  const others = [...app.views.filter((x) => x !== v), app.dashboard];
+  const saved = new Map([v, ...others].map((o) => [o.root, { p: o.root.position.clone(), q: o.root.quaternion.clone(), s: o.root.scale.x }]));
+
+  // Target: centred in front, a little larger; 3D views sit lower so you look down onto them.
+  const { pos, fwd } = viewerPose();
+  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+  // Centre along where you're actually looking (pitch limited to ±20°), not just at eye level.
+  const look = new THREE.Vector3();
+  camera.getWorldDirection(look);
+  const pitch = THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(look.y, -1, 1)), -0.35, 0.35);
+  const dist = inXR ? (v.is3D ? 1.3 : 1.5) : (v.is3D ? 1.4 : 1.75);
+  const target = pos.clone().addScaledVector(fwd, dist * Math.cos(pitch));
+  target.y = pos.y + dist * Math.sin(pitch) + (v.is3D ? -0.3 : 0.16); // 2D: shifted up so chart + toolbar are centred together
+  const facing = new THREE.Object3D();
+  facing.position.copy(target);
+  facing.userData.yawOnly = v.is3D;
+  faceViewer(facing);
+  const scale = (v.root.userData.userScale ?? 1) * (v.is3D ? 1.5 : inXR ? 1.3 : 1.0);
+  tweenTo(v.root, target, facing.quaternion, scale);
+  for (const o of others) o.root.visible = false; // step aside; the AI panel stays for voice
+
+  // Data toolbar: under a 2D chart, to the right of a 3D model.
+  const panel = new FocusPanel(v, app);
+  const ps = inXR ? 1.15 : 1;
+  const ph = panel.mesh.geometry.parameters.height * ps, pw = panel.mesh.geometry.parameters.width * ps;
+  const pp = target.clone();
+  if (v.is3D) { pp.addScaledVector(right, 0.33 * scale + pw / 2 + 0.06); pp.y = target.y + 0.18; }
+  else { const vh = v.mesh.geometry.parameters.height * scale; pp.y = target.y - vh / 2 - ph / 2 - 0.03; pp.addScaledVector(fwd, -0.04); }
+  panel.root.position.copy(pp);
+  panel.root.scale.setScalar(ps);
+  faceViewer(panel.root);
+  scene.add(panel.root);
+  focus = { view: v, panel, saved };
+  setFocus(v);
+  app.aiPanel.set({ mode: `focus: ${v.dataset.title}` });
+  xapi('focused', v.dataset.id, v.kind);
+}
+
+function exitFocus() {
+  if (!focus) return;
+  const { view, panel, saved } = focus;
+  focus = null;
+  for (const [root, st] of saved) {
+    root.visible = true;
+    if (root === view.root) tweenTo(root, st.p, st.q, st.s);
+  }
+  scene.remove(panel.root);
+  panel.dispose();
+  for (const p of pointers.values()) if (p.hover === panel) p.hover = null;
+  app.aiPanel.set({ mode: '' });
+}
+
 function arrange() {
+  exitFocus();
   placeSidePanels();
   app.views.forEach((v, i) => place(v, i));
   nextSlot = app.views.length;
@@ -738,6 +857,8 @@ renderer.xr.addEventListener('sessionend', () => {
 //  Boot + frame loop
 // ---------------------------------------------------------------------------------
 
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && focus && document.activeElement?.tagName !== 'INPUT') exitFocus(); });
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -790,6 +911,8 @@ renderer.setAnimationLoop((time, frame) => {
   });
   if (!SAFE_XR) guard('poke', updatePokes);
   CanvasPanel.redrawBudget = renderer.xr.isPresenting ? 1 : 99; // headset: at most one panel re-render per frame
+  guard('tweens', () => updateTweens(dt));
+  if (focus) guard('focus panel', () => focus.panel.update(dt));
   guard('dashboard', () => app.dashboard.update(dt));
   guard('ai panel', () => app.aiPanel.update(dt));
   for (const v of app.views) guard(`view ${v.dataset.id}:${v.kind}`, () => v.update(dt));
