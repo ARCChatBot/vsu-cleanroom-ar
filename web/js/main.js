@@ -28,12 +28,19 @@ import { FocusPanel } from './views/focusPanel.js';
 import { AiPanel } from './views/aiPanel.js';
 import { Analyst, loadSettings, saveSettings, aiConfigured } from './ai/analyst.js';
 import { Voice, speak, stopSpeaking, voiceSupported } from './ai/voice.js';
+import { requireSignIn, signOut } from './auth.js';
 
 // Canvas text needs Inter loaded before the first panel draws.
 await Promise.race([
   Promise.all(['400 20px Inter', '600 20px Inter', '700 20px Inter', '800 20px Inter'].map((f) => document.fonts.load(f))),
   new Promise((r) => setTimeout(r, 2500)),
 ]).catch(() => {});
+
+// Students sign in (VSU ID + name) before the app starts. Kept on this device only.
+const user = await requireSignIn();
+document.getElementById('user-name').textContent = `${user.first} ${user.last} · ${user.id}`;
+document.getElementById('user-chip').hidden = false;
+document.getElementById('signout-btn').addEventListener('click', () => signOut());
 
 // ---------------------------------------------------------------------------------
 //  Renderer, scene, camera
@@ -71,6 +78,7 @@ const settings = loadSettings();
 let focusedView = null;
 
 const app = {
+  user,
   datasets: [],
   views: [],
   dashboard: null,
@@ -582,7 +590,8 @@ function arrange() {
 // Analytics hook: swap for an xAPI statement emitter (LRS) in the progression system.
 let lastXapi = '';
 function xapi(verb, id, detail) {
-  const line = `[xAPI] ${verb} ${id}: ${detail}`;
+  // Actor = the signed-in student (xAPI account form: VSU ID on valdosta.edu).
+  const line = `[xAPI] ${user.first} ${user.last} (${user.id}) ${verb} ${id}: ${detail}`;
   if (line !== lastXapi) { console.info(line); lastXapi = line; }
 }
 

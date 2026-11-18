@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" />
-  <link rel="stylesheet" href="css/style.css?v=3" />
+  <link rel="stylesheet" href="css/style.css?v=4" />
   <script type="importmap">
     {
       "imports": {
@@ -28,6 +28,10 @@
       </div>
     </div>
     <div class="actions">
+      <div id="user-chip" class="user-chip" hidden>
+        <span id="user-name"></span>
+        <button id="signout-btn" class="link" type="button">Sign out</button>
+      </div>
       <label class="btn" title="Load CSV files (or drop them anywhere on the page)">
         Import CSV
         <input id="csv-input" type="file" accept=".csv,text/csv" multiple hidden />
@@ -68,6 +72,39 @@
       </div>
     </form>
   </dialog>
+
+  <div id="signin" class="signin" hidden>
+    <form id="signin-form" class="signin-card" novalidate autocomplete="off">
+      <span class="rule" aria-hidden="true"></span>
+      <div class="eyebrow">Operation SEMI / MI-CHIPS</div>
+      <h1>Sign in to Lab Data AR</h1>
+      <p class="note">Your VSU ID and name record your progress on this device. They are not sent to the AI.</p>
+
+      <label for="signin-id">VSU ID</label>
+      <div class="id-field">
+        <span class="id-prefix" aria-hidden="true">V00</span>
+        <input id="signin-id" name="vsu-id" inputmode="numeric" pattern="[0-9]{6}" maxlength="8" placeholder="123456"
+               aria-describedby="signin-id-err" aria-label="VSU ID, the 6 digits after V00" spellcheck="false" />
+      </div>
+      <div id="signin-id-err" class="field-err" role="alert"></div>
+
+      <div class="name-row">
+        <div>
+          <label for="signin-first">First name</label>
+          <input id="signin-first" name="given-name" autocomplete="given-name" maxlength="40" aria-describedby="signin-first-err" />
+          <div id="signin-first-err" class="field-err" role="alert"></div>
+        </div>
+        <div>
+          <label for="signin-last">Last name</label>
+          <input id="signin-last" name="family-name" autocomplete="family-name" maxlength="40" aria-describedby="signin-last-err" />
+          <div id="signin-last-err" class="field-err" role="alert"></div>
+        </div>
+      </div>
+
+      <label class="check"><input id="signin-remember" type="checkbox" /> Remember me on this device</label>
+      <button type="submit" class="btn primary wide">Sign in</button>
+    </form>
+  </div>
 
   <div id="drop" class="drop" hidden>Drop CSV files to add datasets</div>
   <div id="toast" class="toast" hidden></div>
